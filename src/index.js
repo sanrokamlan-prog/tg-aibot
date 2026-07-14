@@ -9,6 +9,7 @@ const {
 } = require('./contextStore');
 const { decideTrigger } = require('./trigger');
 const { decideAndReply } = require('./ai');
+const { tryAcquireChatAi, releaseChatAi } = require('./chatAiLock');
 const { DEFAULT_PERSONA } = require('./persona');
 const {
   getChatStickers,
@@ -337,6 +338,7 @@ bot.command('persona_clear', async (ctx) => {
 bot.command('ai_test', async (ctx) => {
   if (!requireAllowedChat(ctx)) return;
   if (!(await isAdmin(ctx))) return ctx.reply('只有管理员可以操作');
+  if (!tryAcquireChatAi(ctx.chat.id)) return ctx.reply('当前群已有 AI 请求正在处理，请稍后再试。');
 
   try {
     await ctx.sendChatAction('typing');
@@ -358,6 +360,8 @@ bot.command('ai_test', async (ctx) => {
   } catch (e) {
     console.error('AI 接口测试失败:', e.message);
     ctx.reply(`AI接口测试失败：${e.message.slice(0, 3500)}`);
+  } finally {
+    releaseChatAi(ctx.chat.id);
   }
 });
 
@@ -380,6 +384,10 @@ bot.on('message', async (ctx) => {
 
   const trigger = decideTrigger(ctx, botInfo);
   if (!trigger) return;
+  if (!tryAcquireChatAi(chatId)) {
+    console.log(`跳过并发AI触发: chat=${chatId}, mode=${trigger}`);
+    return;
+  }
 
   console.log(`触发AI回复: chat=${chatId}, mode=${trigger}, text=${messageText.slice(0, 80)}`);
 
@@ -412,6 +420,8 @@ bot.on('message', async (ctx) => {
     if (trigger === 'mention') {
       await ctx.reply(`AI接口出错了：${e.message.slice(0, 3000)}`);
     }
+  } finally {
+    releaseChatAi(chatId);
   }
 });
 
@@ -433,6 +443,8 @@ setInterval(async () => {
     const idleCooldownMs = config.idleCooldownMinutes * 60 * 1000;
 
     if (idleFor > idleThresholdMs && sinceLastIdlePrompt > idleCooldownMs) {
+      if (!tryAcquireChatAi(chatId)) continue;
+
       try {
         const { shouldReply, reply, sticker, stickerTag } = await decideAndReply({
           persona: getPersona(chatId),
@@ -451,6 +463,8 @@ setInterval(async () => {
         }
       } catch (e) {
         console.error('冷场检测失败:', e.message);
+      } finally {
+        releaseChatAi(chatId);
       }
     }
   }

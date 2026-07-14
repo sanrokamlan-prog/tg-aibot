@@ -15,6 +15,7 @@ const MAX_CONTEXT_MESSAGES = envInt('AI_MAX_CONTEXT_MESSAGES', 12);
 const MAX_INPUT_CHARS = envInt('AI_MAX_INPUT_CHARS', 1500);
 const MAX_MESSAGE_CHARS = envInt('AI_MAX_MESSAGE_CHARS', 160);
 const MAX_OUTPUT_TOKENS = envInt('AI_MAX_OUTPUT_TOKENS', 120);
+const REQUEST_TIMEOUT_MS = envInt('AI_REQUEST_TIMEOUT_MS', 30000);
 
 function normalizeBaseUrl(baseUrl) {
   const trimmed = baseUrl.replace(/\/+$/, '');
@@ -148,23 +149,36 @@ async function decideAndReply({ persona, messages, mode, stickerTags = [] }) {
     throw new Error('缺少 AI_API_KEY 或 GROQ_API_KEY');
   }
 
-  const resp = await fetch(getApiUrl(), {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${API_KEY}`,
-    },
-    body: JSON.stringify(body),
-  });
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
-  if (!resp.ok) {
-    const text = await resp.text();
-    throw new Error(`AI API error ${resp.status}: ${text}`);
+  try {
+    const resp = await fetch(getApiUrl(), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${API_KEY}`,
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+
+    if (!resp.ok) {
+      const text = await resp.text();
+      throw new Error(`AI API error ${resp.status}: ${text}`);
+    }
+
+    const data = await resp.json();
+    const raw = isResponsesApi() ? getResponsesText(data) : getChatCompletionsText(data);
+    return parseDecision(raw);
+  } catch (e) {
+    if (e.name === 'AbortError') {
+      throw new Error(`AI API 请求超时（${REQUEST_TIMEOUT_MS}ms）`);
+    }
+    throw e;
+  } finally {
+    clearTimeout(timeoutId);
   }
-
-  const data = await resp.json();
-  const raw = isResponsesApi() ? getResponsesText(data) : getChatCompletionsText(data);
-  return parseDecision(raw);
 }
 
 module.exports = { decideAndReply };

@@ -289,6 +289,7 @@ AI_MAX_CONTEXT_MESSAGES=12
 AI_MAX_INPUT_CHARS=1500
 AI_MAX_MESSAGE_CHARS=160
 AI_MAX_OUTPUT_TOKENS=120
+AI_REQUEST_TIMEOUT_MS=30000
 
 # 随机插话、冷场复活可以用便宜模型；留空则使用 AI_MODEL
 AI_MODEL_RANDOM=
@@ -319,6 +320,7 @@ MAX_HISTORY=25
 | `AI_MAX_INPUT_CHARS` | 每次请求最多发送多少字符的上下文，越小越省钱 |
 | `AI_MAX_MESSAGE_CHARS` | 单条群消息最多保留多少字符，防止长消息烧 token |
 | `AI_MAX_OUTPUT_TOKENS` | AI 每次最多输出多少 token，群聊建议 80-120 |
+| `AI_REQUEST_TIMEOUT_MS` | AI 请求超时毫秒数，默认 30000，防止接口无响应时长期卡住 |
 | `AI_MODEL_RANDOM` | 随机插话单独使用的模型，可以填便宜模型 |
 | `AI_MODEL_IDLE` | 冷场复活单独使用的模型，可以填便宜模型 |
 | `ALLOWED_CHAT_IDS` | 只允许指定群使用机器人，防止被陌生人拉进其他群烧额度 |

@@ -128,6 +128,7 @@ AI_MAX_CONTEXT_MESSAGES=${quoteEnv(config.maxContextMessages)}
 AI_MAX_INPUT_CHARS=${quoteEnv(config.maxInputChars)}
 AI_MAX_MESSAGE_CHARS=${quoteEnv(config.maxMessageChars)}
 AI_MAX_OUTPUT_TOKENS=${quoteEnv(config.maxOutputTokens)}
+AI_REQUEST_TIMEOUT_MS=30000
 
 # 安全限制：只允许这些群使用机器人，多个群 ID 用英文逗号分隔；留空则不限制
 # 在群里发送 /chat_id 可以查看当前群 ID

@@ -6,7 +6,8 @@
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
-    "setup": "node scripts/setup-env.js"
+    "setup": "node scripts/setup-env.js",
+    "test": "node --test"
   },
   "engines": {
     "node": ">=18"
