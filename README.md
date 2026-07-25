@@ -1,8 +1,19 @@
 # Telegram 群组 AI 气氛活跃机器人
 
-一个可以放进 Telegram 群里的 AI 气氛机器人。它会根据群聊上下文偶尔接话、被 @ 时回复、冷场时主动抛话题。
+一个可以放进 Telegram 群里的 AI 气氛机器人。它会根据群聊上下文偶尔接话、被 @ 时回复、冷场时主动抛话题，也可以用 Reaction、贴纸或语音自然回应。
 
 项目基于 Telegraf + OpenAI 兼容格式的 AI 接口，支持 Groq、OpenAI、各种中转站。默认使用长轮询模式，不需要域名、不需要 SSL、不需要开放任何端口。
+
+主要能力：
+
+- SQLite 持久化群配置、贴纸、短期上下文、规则和用量统计
+- 群与 Telegram Topic 上下文隔离，消息按 TTL 自动清理
+- `silent / reaction / sticker / reply` 自适应互动
+- 图片理解、语音转写、链接摘要按需开启
+- Edge 免费 TTS 或 OpenAI 兼容 TTS 语音回复
+- Inline 管理面板、群级模型路由、安静时段和关键词规则
+- 主/备用 AI 接口切换、请求超时和群级并发保护
+- `.env` 与 Docker 数据卷快速导出、恢复
 
 ---
 
@@ -154,11 +165,7 @@ docker compose version
 docker compose up -d --build
 ```
 
-如果你的系统只支持老版 `docker-compose`，则需要把后面的命令改成：
-
-```bash
-docker-compose up -d --build
-```
+本项目推荐使用 Docker Compose v2，也就是 `docker compose` 命令。快速备份和迁移脚本依赖 Compose v2；如果系统只有老版 `docker-compose`，请先升级 Docker Compose。
 
 说明：`https://get.docker.com` 是 Docker 官方提供的便捷安装脚本，适合大多数 Ubuntu / Debian / CentOS 服务器。
 
@@ -182,7 +189,7 @@ cd tg-aibot
 服务器只要装好了 Docker，就可以直接运行这个交互式配置命令：
 
 ```bash
-docker run --rm -it -v "$PWD:/app" -w /app node:20-alpine node scripts/setup-env.js
+docker run --rm -it -v "$PWD:/app" -w /app node:24-alpine node scripts/setup-env.js
 ```
 
 它会一步步提示你填写：
@@ -290,6 +297,7 @@ AI_MAX_INPUT_CHARS=1500
 AI_MAX_MESSAGE_CHARS=160
 AI_MAX_OUTPUT_TOKENS=120
 AI_REQUEST_TIMEOUT_MS=30000
+MESSAGE_TTL_HOURS=24
 
 # 随机插话、冷场复活可以用便宜模型；留空则使用 AI_MODEL
 AI_MODEL_RANDOM=
@@ -302,6 +310,20 @@ ALLOWED_CHAT_IDS=
 STICKER_IDS=
 STICKER_REPLY_CHANCE=0.15
 DATA_DIR=/app/data
+DATABASE_PATH=/app/data/bot.db
+
+# 自然互动
+REACTION_ENABLED=true
+
+# 多模态默认关闭，确认模型支持后再开启
+VISION_ENABLED=false
+TRANSCRIPTION_ENABLED=false
+LINK_PREVIEW_ENABLED=false
+
+# 语音回复先保持关闭，部署后可用 /voice_on 开启
+TTS_ENABLED=false
+TTS_PROVIDER=edge
+TTS_EDGE_VOICE=zh-CN-XiaoxiaoNeural
 
 # 降低主动发言频率
 RANDOM_REPLY_CHANCE=0.02
@@ -321,18 +343,25 @@ MAX_HISTORY=25
 | `AI_MAX_MESSAGE_CHARS` | 单条群消息最多保留多少字符，防止长消息烧 token |
 | `AI_MAX_OUTPUT_TOKENS` | AI 每次最多输出多少 token，群聊建议 80-120 |
 | `AI_REQUEST_TIMEOUT_MS` | AI 请求超时毫秒数，默认 30000，防止接口无响应时长期卡住 |
+| `MESSAGE_TTL_HOURS` | 短期聊天上下文保留小时数，默认 24 |
 | `AI_MODEL_RANDOM` | 随机插话单独使用的模型，可以填便宜模型 |
 | `AI_MODEL_IDLE` | 冷场复活单独使用的模型，可以填便宜模型 |
 | `ALLOWED_CHAT_IDS` | 只允许指定群使用机器人，防止被陌生人拉进其他群烧额度 |
 | `STICKER_IDS` | 全局贴纸池，多个贴纸 file_id 用英文逗号分隔 |
 | `STICKER_REPLY_CHANCE` | AI 判断适合发贴纸时，实际发送贴纸的概率 |
-| `DATA_DIR` | 持久化数据目录，贴纸池会保存在这里 |
+| `DATA_DIR` | 持久化数据目录，SQLite、贴纸和迁移数据都在这里 |
+| `DATABASE_PATH` | SQLite 数据库路径，Docker 默认 `/app/data/bot.db` |
+| `REACTION_ENABLED` | 是否允许机器人用 Reaction 轻量回应 |
+| `VISION_ENABLED` | 是否把触发消息中的图片发送给支持视觉的模型 |
+| `TRANSCRIPTION_ENABLED` | 是否通过兼容 `/audio/transcriptions` 转写触发的语音 |
+| `LINK_PREVIEW_ENABLED` | 是否安全读取触发消息中的公网链接作为补充上下文 |
+| `TTS_PROVIDER` | `edge` 免费语音，或 `openai` 兼容 `/audio/speech` |
 | `RANDOM_REPLY_CHANCE` | 普通聊天时随机插话概率，越大越活跃，也越费钱 |
 | `MIN_REPLY_INTERVAL_SECONDS` | 两次主动发言最少间隔多少秒 |
 | `MIN_MSGS_BETWEEN_REPLIES` | 距离上次发言至少过多少条群消息才会再次插话 |
 | `IDLE_THRESHOLD_MINUTES` | 群里安静多久后尝试主动抛话题 |
 | `IDLE_COOLDOWN_MINUTES` | 两次冷场发言之间的最少间隔 |
-| `MAX_HISTORY` | 每个群内存里最多保存多少条历史消息，不代表每次都发给 AI |
+| `MAX_HISTORY` | 每个群/Topic 最多保存多少条短期上下文 |
 
 如果觉得机器人太安静，可以慢慢把 `RANDOM_REPLY_CHANCE` 调高，比如：
 
@@ -402,6 +431,51 @@ docker compose restart
    ```
 
 贴纸池会保存在 Docker 数据卷里，容器重启不会丢。
+
+### 开启图片、语音、链接和 TTS
+
+这些功能默认关闭，避免文本模型或普通中转站不兼容。确认接口支持后修改 `.env`：
+
+```env
+# 图片理解：使用当前 AI 模型的视觉能力
+VISION_ENABLED=true
+
+# 语音转写：使用 OpenAI 兼容 /audio/transcriptions
+TRANSCRIPTION_ENABLED=true
+TRANSCRIPTION_BASE_URL=https://api.example.com/v1
+TRANSCRIPTION_API_KEY=sk-xxxx
+TRANSCRIPTION_MODEL=whisper-1
+
+# 读取消息中的第一个公网链接；内网地址会被拒绝
+LINK_PREVIEW_ENABLED=true
+```
+
+免费 Edge TTS 不需要额外 Key：
+
+```env
+TTS_PROVIDER=edge
+TTS_EDGE_VOICE=zh-CN-XiaoxiaoNeural
+```
+
+也可以使用 OpenAI 兼容语音接口：
+
+```env
+TTS_PROVIDER=openai
+TTS_BASE_URL=https://api.example.com/v1
+TTS_API_KEY=sk-xxxx
+TTS_MODEL=gpt-4o-mini-tts
+TTS_OPENAI_VOICE=alloy
+```
+
+修改 `.env` 后重新构建，再在群里开启：
+
+```bash
+docker compose up -d --build
+```
+
+```text
+/voice_on
+```
 
 ---
 
@@ -478,9 +552,10 @@ docker compose logs -f
 
 ```text
 /ai_config
+/ai_panel
 ```
 
-管理员查看当前群的详细配置，包括随机插话概率、冷却时间、贴纸概率等。
+打开 Inline 管理面板，可直接切换 AI、Reaction、语音回复，并选择安静、均衡、活跃预设。
 
 ```text
 /ai_set random_chance 0.02
@@ -489,6 +564,7 @@ docker compose logs -f
 /ai_set idle_threshold 30
 /ai_set idle_cooldown 120
 /ai_set sticker_chance 0.15
+/ai_set tts_chance 1
 ```
 
 管理员在群里直接修改配置，不用上服务器。配置会保存到 Docker 数据卷里，重启不丢。
@@ -503,6 +579,51 @@ docker compose logs -f
 | `idle_threshold` | 群里安静多少分钟后尝试冷场复活 |
 | `idle_cooldown` | 两次冷场复活之间最少间隔分钟数 |
 | `sticker_chance` | AI 想发贴纸时，实际发送贴纸的概率，范围 0-1 |
+| `tts_chance` | 开启语音后，实际使用语音回复的概率，范围 0-1 |
+
+```text
+/voice_on
+/voice_off
+```
+
+开启或关闭当前群语音回复。
+
+```text
+/quiet 23:00 08:00
+/quiet off
+```
+
+设置跨午夜安静时段。安静时段内不随机插话、不冷场复活，但被 @ 时仍会回复。
+
+```text
+/ai_model mention gpt-5-mini
+/ai_model random gpt-4o-mini
+/ai_model idle default
+```
+
+按当前群和触发模式覆盖模型，使用 `default` 恢复 `.env` 模型路由。
+
+```text
+/usage
+```
+
+查看当前群最近 24 小时的请求数、成功数、输入输出字符和平均延迟。
+
+```text
+/rule_add reply 早上好 => 早啊，今天状态怎么样？
+/rule_add block 广告链接 => 请不要发广告
+/rule_list
+/rule_del 3
+/rule_clear
+```
+
+添加固定回复或广告删除规则。`block` 需要机器人拥有删除消息权限，每条规则带独立冷却，避免连续刷屏。
+
+```text
+/extensions
+```
+
+查看当前加载的扩展模块。
 
 ```text
 /persona
@@ -572,7 +693,68 @@ docker compose logs -f
 
 ## 九、更新项目
 
-### 服务器更新代码
+### 从旧版本原地升级到 2.0
+
+新版继续使用原来的 `tg-ai-bot-data` 数据卷，不需要删除容器或重新配置机器人。第一次启动时会自动把旧版的 `chat-config.json` 和 `stickers.json` 导入 SQLite，原文件会保留，不会删除。
+
+登录服务器并进入项目目录：
+
+```bash
+cd ~/tg-aibot
+```
+
+先确认服务器上的代码没有被手动修改：
+
+```bash
+git status --short
+```
+
+如果没有输出，就可以拉取新版：
+
+```bash
+git pull
+```
+
+使用新版自带的迁移脚本，在重建前完整备份 `.env` 和旧数据卷：
+
+```bash
+sh scripts/migrate.sh export "$HOME/tg-aibot-pre-v2-$(date +%Y%m%d-%H%M%S).tar.gz"
+```
+
+备份时机器人会短暂停止，复制完成后自动恢复运行。备份包包含 `BOT_TOKEN` 和 `AI_API_KEY`，不要上传到 GitHub 或公开网盘。
+
+重新构建并启动新版：
+
+```bash
+docker compose up -d --build
+```
+
+查看最近日志：
+
+```bash
+docker compose logs --tail=100 -f
+```
+
+首次升级可能看到下面的日志，表示旧配置和贴纸已经成功迁移：
+
+```text
+已导入旧数据: 群配置 1，贴纸 5
+```
+
+原来的 `.env` 会继续使用。新增的图片理解、语音转写、链接读取和 TTS 默认关闭；旧 `.env` 没有这些字段也能正常启动，需要时再参考前面的配置章节开启。
+
+升级完成后，可以在群里依次发送下面的命令确认状态：
+
+```text
+/ai_status
+/ai_panel
+/ai_test
+/usage
+```
+
+如果 `git status --short` 有输出，说明服务器上存在本地修改。先备份这些修改，不要直接强制覆盖或删除，再处理 `git pull` 冲突。
+
+### 日常更新
 
 如果 GitHub 仓库有更新，登录服务器后进入项目目录：
 
@@ -598,13 +780,6 @@ docker compose up -d --build
 docker compose logs -f
 ```
 
-如果你的系统使用老版 `docker-compose`，就把命令换成：
-
-```bash
-docker-compose up -d --build
-docker-compose logs -f
-```
-
 ### 本地电脑更新代码
 
 如果你本地电脑也 clone 了这个项目，进入本地项目目录后执行：
@@ -620,6 +795,44 @@ git status
 ```
 
 不懂怎么处理冲突时，不要直接删除文件，把报错复制出来再问。
+
+### 快速迁移到新服务器
+
+迁移脚本会短暂停止机器人，把 `.env` 和 Docker 数据卷中的 SQLite、群配置、贴纸、人设规则一起一致地打包，完成后恢复原运行状态。
+
+在旧服务器的项目目录执行：
+
+```bash
+sh scripts/migrate.sh export
+```
+
+脚本会生成类似下面的文件：
+
+```text
+tg-aibot-backup-20260725-120000.tar.gz
+```
+
+把备份文件传到新服务器，然后 clone 本项目并进入项目目录：
+
+```bash
+git clone https://github.com/sanrokamlan-prog/tg-aibot.git
+cd tg-aibot
+sh scripts/migrate.sh import /备份文件所在路径/tg-aibot-backup-20260725-120000.tar.gz
+```
+
+导入脚本会自动恢复 `.env` 和数据卷，重新构建镜像并启动机器人。如果目标目录已经存在 `.env`，需要明确允许覆盖：
+
+```bash
+sh scripts/migrate.sh import /备份文件所在路径/tg-aibot-backup.tar.gz --force
+```
+
+也可以指定导出的文件路径：
+
+```bash
+sh scripts/migrate.sh export /root/tg-aibot-backup.tar.gz
+```
+
+迁移要求使用 Docker Compose v2，也就是 `docker compose` 命令。备份包中包含 `BOT_TOKEN` 和 `AI_API_KEY`，默认权限为仅当前用户可读；不要上传到网盘、GitHub 或发给其他人，迁移完成后及时删除。
 
 ---
 
@@ -835,7 +1048,7 @@ PERSONA_PROMPT=
 可以用交互式配置修改：
 
 ```bash
-docker run --rm -it -v "$PWD:/app" -w /app node:20-alpine node scripts/setup-env.js
+docker run --rm -it -v "$PWD:/app" -w /app node:24-alpine node scripts/setup-env.js
 ```
 
 也可以手动修改：
@@ -867,34 +1080,41 @@ docker compose restart
 - 如果 `BOT_TOKEN` 泄露，去 `@BotFather` 使用 `/revoke` 重新生成。
 - 如果 `AI_API_KEY` 泄露，去中转站后台删除旧 key，重新创建。
 - 群聊天内容会发送给你的 AI 接口或中转站，建议在群公告里说明有 AI 机器人在场。
+- 开启图片、转写或链接功能后，相应媒体和网页摘要也会发送给 AI 接口。
+- 快速迁移备份包含 `.env` 中的全部密钥，只应通过可信通道传输。
+- `block` 关键词规则会删除消息，启用前确认规则足够精确。
 
 ---
 
 ## 十四、工作原理简述
 
-机器人会把每个群最近的若干条文字消息缓存在内存里，作为上下文发给模型。
+机器人使用 Node.js 自带 SQLite 将每个群和 Topic 的短期上下文、群配置、贴纸、关键词规则及 AI 用量保存在 `/app/data/bot.db`。旧版本的 `chat-config.json` 和 `stickers.json` 会在首次启动时自动导入，但不会删除。
+
+短期消息同时受两个参数限制：
+
+- `MAX_HISTORY`：每个群/Topic 最多保留多少条
+- `MESSAGE_TTL_HOURS`：消息最多保留多少小时
 
 触发方式有三种：
 
 1. 群友 @ 机器人，或回复机器人的消息：一定尝试回复。
-2. 普通聊天：满足冷却时间、消息间隔和概率条件后，随机插话。
-3. 群里冷场：安静一段时间后，主动抛一个话题。
+2. 普通聊天：满足冷却、消息间隔和自适应概率后触发；群聊越快越少插话。
+3. 群里冷场：每轮真人聊天最多主动复活一次，无人回应时不会周期性自言自语。
+
+AI 每次只选择一种动作：
+
+- `silent`：不回应
+- `reaction`：给当前消息点一个 Reaction
+- `sticker`：发送匹配标签的贴纸
+- `reply`：发送文字，或在群内开启后发送 TTS 语音
 
 注意：
 
-- 聊天上下文只存在内存里，重启会清空。
-- 目前只处理文字消息，不处理图片、贴纸、语音。
-- `/ai_off`、`/ai_chance` 这些群配置目前也只存在内存里，重启后会恢复 `.env` 默认值。
-
----
-
-## 后续可以加的功能
-
-- 按不同群设置不同人设
-- 关键词触发固定回复
-- 使用 SQLite 持久化群配置和上下文
-- 支持图片、贴纸、语音消息
-- 增加限流退避，遇到 429 自动降低发言频率
+- 图片、转写和链接读取默认关闭，需要接口支持并手动开启。
+- 图片、语音文件只在消息已经触发 AI 时下载，不会处理群里的每个媒体文件。
+- 同一群一次只运行一个 AI 请求，不同群可以并行。
+- 主接口出现 429/5xx 时，可切换到配置好的备用 OpenAI 兼容接口。
+- 迁移脚本会完整备份 `.env` 和 `/app/data`，其中包含敏感密钥。
 
 ---
 

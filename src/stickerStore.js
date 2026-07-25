@@ -1,71 +1,52 @@
-const fs = require('fs');
-const path = require('path');
+const { getDatabase } = require('./database');
 
-const DATA_DIR = process.env.DATA_DIR || path.join(process.cwd(), 'data');
-const STORE_PATH = path.join(DATA_DIR, 'stickers.json');
-
-let cache = null;
-
-function ensureLoaded() {
-  if (cache) return;
-
-  try {
-    const raw = fs.readFileSync(STORE_PATH, 'utf8');
-    cache = JSON.parse(raw);
-  } catch (e) {
-    cache = { chats: {} };
-  }
-}
-
-function save() {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-  fs.writeFileSync(STORE_PATH, JSON.stringify(cache, null, 2));
-}
-
-function normalizeSticker(item) {
-  if (typeof item === 'string') return { fileId: item, tags: [] };
-  return {
-    fileId: item.fileId || item.file_id || item.id,
-    tags: Array.isArray(item.tags) ? item.tags.map((tag) => String(tag).trim()).filter(Boolean) : [],
-  };
+function normalizeTags(tags) {
+  return Array.from(new Set(
+    (Array.isArray(tags) ? tags : []).map((tag) => String(tag).trim()).filter(Boolean)
+  ));
 }
 
 function getChatStickers(chatId) {
-  ensureLoaded();
-  return (cache.chats[String(chatId)] || []).map(normalizeSticker).filter((item) => item.fileId);
-}
+  const rows = getDatabase().prepare(`
+    SELECT file_id, tags_json FROM stickers WHERE chat_id = ? ORDER BY created_at, file_id
+  `).all(String(chatId));
 
-function getChatStickerIds(chatId) {
-  return getChatStickers(chatId).map((item) => item.fileId);
+  return rows.map((row) => {
+    let tags = [];
+    try {
+      tags = normalizeTags(JSON.parse(row.tags_json));
+    } catch (error) {
+      console.error(`贴纸标签损坏: file=${row.file_id}:`, error.message);
+    }
+    return { fileId: row.file_id, tags };
+  });
 }
 
 function addChatSticker(chatId, stickerId, tags = []) {
-  ensureLoaded();
+  const db = getDatabase();
   const key = String(chatId);
-  const stickers = getChatStickers(chatId);
-  const cleanTags = tags.map((tag) => String(tag).trim()).filter(Boolean);
-  const existing = stickers.find((item) => item.fileId === stickerId);
+  const existing = db.prepare(`
+    SELECT tags_json FROM stickers WHERE chat_id = ? AND file_id = ?
+  `).get(key, stickerId);
+  let mergedTags = normalizeTags(tags);
 
   if (existing) {
-    existing.tags = Array.from(new Set([...existing.tags, ...cleanTags]));
-  } else {
-    stickers.push({ fileId: stickerId, tags: cleanTags });
+    try {
+      mergedTags = normalizeTags([...JSON.parse(existing.tags_json), ...mergedTags]);
+    } catch (error) {
+      console.error(`读取贴纸标签失败: file=${stickerId}:`, error.message);
+    }
   }
 
-  cache.chats[key] = stickers;
-  save();
-  return stickers;
+  db.prepare(`
+    INSERT INTO stickers(chat_id, file_id, tags_json, created_at) VALUES(?, ?, ?, ?)
+    ON CONFLICT(chat_id, file_id) DO UPDATE SET tags_json = excluded.tags_json
+  `).run(key, stickerId, JSON.stringify(mergedTags), Date.now());
+  return getChatStickers(chatId);
 }
 
 function clearChatStickers(chatId) {
-  ensureLoaded();
-  cache.chats[String(chatId)] = [];
-  save();
+  getDatabase().prepare('DELETE FROM stickers WHERE chat_id = ?').run(String(chatId));
 }
 
-module.exports = {
-  getChatStickers,
-  getChatStickerIds,
-  addChatSticker,
-  clearChatStickers,
-};
+module.exports = { getChatStickers, addChatSticker, clearChatStickers };

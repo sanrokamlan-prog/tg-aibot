@@ -1,38 +1,156 @@
-const MAX_HISTORY = parseInt(process.env.MAX_HISTORY || '40', 10);
+const { getDatabase } = require('./database');
 
-// chatId -> { messages, lastBotReplyAt, lastIdlePromptAt, msgSinceBotReply, aiEnabled, randomChance }
+function positiveInt(value, fallback) {
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+const MAX_HISTORY = positiveInt(process.env.MAX_HISTORY, 40);
+const MESSAGE_TTL_HOURS = positiveInt(process.env.MESSAGE_TTL_HOURS, 24);
 const chats = new Map();
 
-function getChat(chatId) {
-  if (!chats.has(chatId)) {
-    chats.set(chatId, {
-      messages: [],
-      lastBotReplyAt: 0,
-      lastIdlePromptAt: 0,
-      msgSinceBotReply: 0,
-      aiEnabled: true,
-      randomChance: parseFloat(process.env.RANDOM_REPLY_CHANCE || '0.05'),
-    });
+function normalizeThreadId(threadId) {
+  return String(threadId || 0);
+}
+
+function conversationKey(chatId, threadId = 0) {
+  return `${String(chatId)}:${normalizeThreadId(threadId)}`;
+}
+
+function loadMessages(chatId, threadId) {
+  const rows = getDatabase().prepare(`
+    SELECT * FROM (
+      SELECT id, telegram_message_id, reply_to_message_id, user_name, text, ts, from_bot
+      FROM messages
+      WHERE chat_id = ? AND thread_id = ?
+      ORDER BY id DESC LIMIT ?
+    ) ORDER BY id ASC
+  `).all(String(chatId), normalizeThreadId(threadId), MAX_HISTORY);
+
+  return rows.map((row) => ({
+    dbId: row.id,
+    telegramMessageId: row.telegram_message_id,
+    replyToMessageId: row.reply_to_message_id,
+    user: row.user_name,
+    text: row.text,
+    ts: row.ts,
+    fromBot: Boolean(row.from_bot),
+  }));
+}
+
+function getChat(chatId, threadId = 0) {
+  const key = conversationKey(chatId, threadId);
+  if (chats.has(key)) return chats.get(key);
+
+  const normalizedThreadId = normalizeThreadId(threadId);
+  const row = getDatabase().prepare(`
+    SELECT * FROM conversation_state WHERE chat_id = ? AND thread_id = ?
+  `).get(String(chatId), normalizedThreadId);
+  const state = {
+    chatId,
+    threadId: Number(threadId || 0),
+    messages: loadMessages(chatId, threadId),
+    lastBotReplyAt: row?.last_bot_reply_at || 0,
+    lastIdlePromptAt: row?.last_idle_prompt_at || 0,
+    lastHumanMessageAt: row?.last_human_message_at || 0,
+    idlePromptedForHumanAt: row?.idle_prompted_for_human_at || 0,
+    msgSinceBotReply: row?.msg_since_bot_reply || 0,
+  };
+  chats.set(key, state);
+  return state;
+}
+
+function persistState(state) {
+  getDatabase().prepare(`
+    INSERT INTO conversation_state(
+      chat_id, thread_id, last_bot_reply_at, last_idle_prompt_at,
+      last_human_message_at, idle_prompted_for_human_at, msg_since_bot_reply
+    ) VALUES(?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(chat_id, thread_id) DO UPDATE SET
+      last_bot_reply_at = excluded.last_bot_reply_at,
+      last_idle_prompt_at = excluded.last_idle_prompt_at,
+      last_human_message_at = excluded.last_human_message_at,
+      idle_prompted_for_human_at = excluded.idle_prompted_for_human_at,
+      msg_since_bot_reply = excluded.msg_since_bot_reply
+  `).run(
+    String(state.chatId), normalizeThreadId(state.threadId), state.lastBotReplyAt,
+    state.lastIdlePromptAt, state.lastHumanMessageAt, state.idlePromptedForHumanAt,
+    state.msgSinceBotReply
+  );
+}
+
+function pruneConversation(chatId, threadId) {
+  const cutoff = Date.now() - MESSAGE_TTL_HOURS * 60 * 60 * 1000;
+  getDatabase().prepare(`
+    DELETE FROM messages
+    WHERE chat_id = ? AND thread_id = ?
+      AND (ts < ? OR id NOT IN (
+        SELECT id FROM messages WHERE chat_id = ? AND thread_id = ? ORDER BY id DESC LIMIT ?
+      ))
+  `).run(
+    String(chatId), normalizeThreadId(threadId), cutoff,
+    String(chatId), normalizeThreadId(threadId), MAX_HISTORY
+  );
+}
+
+function pushMessage(chatId, threadId, msg) {
+  const state = getChat(chatId, threadId);
+  const result = getDatabase().prepare(`
+    INSERT INTO messages(
+      chat_id, thread_id, telegram_message_id, reply_to_message_id,
+      user_name, text, ts, from_bot
+    ) VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    String(chatId), normalizeThreadId(threadId), msg.telegramMessageId || null,
+    msg.replyToMessageId || null, msg.user, msg.text, msg.ts, msg.fromBot ? 1 : 0
+  );
+  const stored = { ...msg, dbId: Number(result.lastInsertRowid) };
+  state.messages.push(stored);
+  if (state.messages.length > MAX_HISTORY) state.messages.shift();
+
+  if (!msg.fromBot) {
+    state.msgSinceBotReply += 1;
+    state.lastHumanMessageAt = msg.ts;
   }
-  return chats.get(chatId);
+  persistState(state);
+  pruneConversation(chatId, threadId);
+  return stored;
 }
 
-function pushMessage(chatId, msg) {
-  const c = getChat(chatId);
-  c.messages.push(msg);
-  if (c.messages.length > MAX_HISTORY) c.messages.shift();
-  if (!msg.fromBot) c.msgSinceBotReply += 1;
-  return c;
+function updateMessageText(chatId, threadId, dbId, text) {
+  getDatabase().prepare('UPDATE messages SET text = ? WHERE id = ?').run(text, dbId);
+  const message = getChat(chatId, threadId).messages.find((item) => item.dbId === dbId);
+  if (message) message.text = text;
 }
 
-function markBotReplied(chatId) {
-  const c = getChat(chatId);
-  c.lastBotReplyAt = Date.now();
-  c.msgSinceBotReply = 0;
+function markBotReplied(chatId, threadId = 0) {
+  const state = getChat(chatId, threadId);
+  state.lastBotReplyAt = Date.now();
+  state.msgSinceBotReply = 0;
+  persistState(state);
 }
 
-function markIdlePrompted(chatId) {
-  getChat(chatId).lastIdlePromptAt = Date.now();
+function markIdlePrompted(chatId, threadId = 0) {
+  const state = getChat(chatId, threadId);
+  state.lastIdlePromptAt = Date.now();
+  state.idlePromptedForHumanAt = state.lastHumanMessageAt;
+  persistState(state);
 }
 
-module.exports = { chats, getChat, pushMessage, markBotReplied, markIdlePrompted };
+function pruneExpiredMessages() {
+  const cutoff = Date.now() - MESSAGE_TTL_HOURS * 60 * 60 * 1000;
+  getDatabase().prepare('DELETE FROM messages WHERE ts < ?').run(cutoff);
+}
+
+module.exports = {
+  chats,
+  conversationKey,
+  getChat,
+  pushMessage,
+  updateMessageText,
+  markBotReplied,
+  markIdlePrompted,
+  pruneExpiredMessages,
+  MAX_HISTORY,
+  MESSAGE_TTL_HOURS,
+};

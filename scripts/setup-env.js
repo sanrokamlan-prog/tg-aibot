@@ -122,6 +122,11 @@ AI_MODEL=${quoteEnv(config.model)}
 AI_MODEL_RANDOM=${quoteEnv(config.randomModel)}
 AI_MODEL_IDLE=${quoteEnv(config.idleModel)}
 AI_DISABLE_RESPONSE_STORAGE=${quoteEnv(config.disableResponseStorage)}
+AI_CHAT_TOKEN_FIELD=max_tokens
+AI_FALLBACK_API_TYPE=chat_completions
+AI_FALLBACK_BASE_URL=
+AI_FALLBACK_API_KEY=
+AI_FALLBACK_MODEL=
 
 # 省钱配置：限制每次请求带多少上下文和最多输出多少 token
 AI_MAX_CONTEXT_MESSAGES=${quoteEnv(config.maxContextMessages)}
@@ -129,6 +134,29 @@ AI_MAX_INPUT_CHARS=${quoteEnv(config.maxInputChars)}
 AI_MAX_MESSAGE_CHARS=${quoteEnv(config.maxMessageChars)}
 AI_MAX_OUTPUT_TOKENS=${quoteEnv(config.maxOutputTokens)}
 AI_REQUEST_TIMEOUT_MS=30000
+
+# 多模态功能：确认接口和模型支持后再开启
+VISION_ENABLED=false
+VISION_MAX_BYTES=5242880
+TRANSCRIPTION_ENABLED=false
+TRANSCRIPTION_BASE_URL=
+TRANSCRIPTION_API_KEY=
+TRANSCRIPTION_MODEL=whisper-1
+TRANSCRIPTION_LANGUAGE=zh
+LINK_PREVIEW_ENABLED=false
+LINK_PREVIEW_MAX_BYTES=524288
+
+# TTS：部署后可在群里发送 /voice_on 开启
+TTS_ENABLED=false
+TTS_PROVIDER=edge
+TTS_EDGE_VOICE=zh-CN-XiaoxiaoNeural
+TTS_OPENAI_VOICE=alloy
+TTS_MODEL=gpt-4o-mini-tts
+TTS_BASE_URL=
+TTS_API_KEY=
+TTS_RESPONSE_FORMAT=mp3
+TTS_REPLY_CHANCE=1
+TTS_TIMEOUT_MS=30000
 
 # 安全限制：只允许这些群使用机器人，多个群 ID 用英文逗号分隔；留空则不限制
 # 在群里发送 /chat_id 可以查看当前群 ID
@@ -145,9 +173,19 @@ ADMIN_USER_IDS=${quoteEnv(config.adminUserIds)}
 STICKER_IDS=${quoteEnv(config.stickerIds)}
 STICKER_REPLY_CHANCE=${quoteEnv(config.stickerReplyChance)}
 DATA_DIR=/app/data
+DATABASE_PATH=/app/data/bot.db
+MESSAGE_TTL_HOURS=24
+USAGE_TTL_DAYS=30
+TZ=Asia/Shanghai
 
 # 人设：留空则使用 src/persona.js 中的默认人设
 PERSONA_PROMPT=${quoteEnv(config.personaPrompt)}
+
+# 互动方式与规则扩展
+REACTION_ENABLED=true
+RULE_COOLDOWN_SECONDS=60
+QUIET_HOURS_START=
+QUIET_HOURS_END=
 
 # 普通消息中随机插话的概率 (0-1)
 RANDOM_REPLY_CHANCE=${quoteEnv(config.randomReplyChance)}
@@ -421,7 +459,9 @@ async function main() {
     maxHistory,
   });
 
-  fs.writeFileSync('.env', env);
+  const tempEnvPath = `.env.setup-${process.pid}`;
+  fs.writeFileSync(tempEnvPath, env, { mode: 0o600 });
+  fs.renameSync(tempEnvPath, '.env');
   console.log('\n✅ 配置完成，已生成 .env。');
   console.log('现在可以执行：');
   console.log('docker compose up -d --build');

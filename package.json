@@ -1,6 +1,6 @@
 {
   "name": "tg-ai-bot",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "private": true,
   "description": "Telegram 群组 AI 气氛活跃机器人",
   "main": "src/index.js",
@@ -10,9 +10,11 @@
     "test": "node --test"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=24.15"
   },
   "dependencies": {
+    "cheerio": "^1.1.2",
+    "node-edge-tts": "^1.2.10",
     "telegraf": "^4.16.3",
     "dotenv": "^16.4.5"
   }

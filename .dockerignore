@@ -1,0 +1,10 @@
+.git
+.gitignore
+.env
+.env.*
+!.env.example
+data
+node_modules
+test
+npm-debug.log*
+tg-aibot-backup-*.tar.gz

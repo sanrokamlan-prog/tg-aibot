@@ -3,10 +3,17 @@ services:
     build: .
     container_name: tg-ai-bot
     restart: always
+    init: true
+    read_only: true
     env_file:
       - .env
     volumes:
       - tg-ai-bot-data:/app/data
+    tmpfs:
+      - /tmp:size=64m
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 20s
     logging:
       driver: "json-file"
       options:
