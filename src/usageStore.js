@@ -1,4 +1,5 @@
 const { getDatabase } = require('./database');
+const { STORAGE_DEFAULTS } = require('./defaults');
 const { envInt } = require('./env');
 
 function recordAiUsage({ chatId, mode, model, latencyMs, inputChars, outputChars, success, error = '' }) {
@@ -11,8 +12,12 @@ function recordAiUsage({ chatId, mode, model, latencyMs, inputChars, outputChars
     String(chatId), mode, model, Math.round(latencyMs), inputChars, outputChars,
     success ? 1 : 0, String(error).slice(0, 500), Date.now()
   );
-  const cutoff = Date.now() - envInt('USAGE_TTL_DAYS', 30) * 24 * 60 * 60 * 1000;
-  db.prepare('DELETE FROM ai_usage WHERE ts < ?').run(cutoff);
+  pruneExpiredUsage();
+}
+
+function pruneExpiredUsage(now = Date.now()) {
+  const cutoff = now - envInt('USAGE_TTL_DAYS', STORAGE_DEFAULTS.usageTtlDays) * 24 * 60 * 60 * 1000;
+  return getDatabase().prepare('DELETE FROM ai_usage WHERE ts < ?').run(cutoff).changes;
 }
 
 function getUsageSummary(chatId, sinceMs = 24 * 60 * 60 * 1000) {
@@ -26,4 +31,4 @@ function getUsageSummary(chatId, sinceMs = 24 * 60 * 60 * 1000) {
   `).get(String(chatId), Date.now() - sinceMs);
 }
 
-module.exports = { recordAiUsage, getUsageSummary };
+module.exports = { recordAiUsage, getUsageSummary, pruneExpiredUsage };

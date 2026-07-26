@@ -1,12 +1,13 @@
 const { getDatabase } = require('./database');
+const { STORAGE_DEFAULTS } = require('./defaults');
 
 function positiveInt(value, fallback) {
   const parsed = Number.parseInt(value, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
-const MAX_HISTORY = positiveInt(process.env.MAX_HISTORY, 40);
-const MESSAGE_TTL_HOURS = positiveInt(process.env.MESSAGE_TTL_HOURS, 24);
+const MAX_HISTORY = positiveInt(process.env.MAX_HISTORY, STORAGE_DEFAULTS.maxHistory);
+const MESSAGE_TTL_HOURS = positiveInt(process.env.MESSAGE_TTL_HOURS, STORAGE_DEFAULTS.messageTtlHours);
 const chats = new Map();
 
 function normalizeThreadId(threadId) {
@@ -17,15 +18,26 @@ function conversationKey(chatId, threadId = 0) {
   return `${String(chatId)}:${normalizeThreadId(threadId)}`;
 }
 
+function messageCutoff(now = Date.now()) {
+  return now - MESSAGE_TTL_HOURS * 60 * 60 * 1000;
+}
+
+function pruneStateMessages(state, now = Date.now()) {
+  const retained = state.messages
+    .filter((message) => message.ts >= messageCutoff(now))
+    .slice(-MAX_HISTORY);
+  state.messages.splice(0, state.messages.length, ...retained);
+}
+
 function loadMessages(chatId, threadId) {
   const rows = getDatabase().prepare(`
     SELECT * FROM (
       SELECT id, telegram_message_id, reply_to_message_id, user_name, text, ts, from_bot
       FROM messages
-      WHERE chat_id = ? AND thread_id = ?
+      WHERE chat_id = ? AND thread_id = ? AND ts >= ?
       ORDER BY id DESC LIMIT ?
     ) ORDER BY id ASC
-  `).all(String(chatId), normalizeThreadId(threadId), MAX_HISTORY);
+  `).all(String(chatId), normalizeThreadId(threadId), messageCutoff(), MAX_HISTORY);
 
   return rows.map((row) => ({
     dbId: row.id,
@@ -40,7 +52,11 @@ function loadMessages(chatId, threadId) {
 
 function getChat(chatId, threadId = 0) {
   const key = conversationKey(chatId, threadId);
-  if (chats.has(key)) return chats.get(key);
+  if (chats.has(key)) {
+    const state = chats.get(key);
+    pruneStateMessages(state);
+    return state;
+  }
 
   const normalizedThreadId = normalizeThreadId(threadId);
   const row = getDatabase().prepare(`
@@ -80,7 +96,7 @@ function persistState(state) {
 }
 
 function pruneConversation(chatId, threadId) {
-  const cutoff = Date.now() - MESSAGE_TTL_HOURS * 60 * 60 * 1000;
+  const cutoff = messageCutoff();
   getDatabase().prepare(`
     DELETE FROM messages
     WHERE chat_id = ? AND thread_id = ?
@@ -106,7 +122,7 @@ function pushMessage(chatId, threadId, msg) {
   );
   const stored = { ...msg, dbId: Number(result.lastInsertRowid) };
   state.messages.push(stored);
-  if (state.messages.length > MAX_HISTORY) state.messages.shift();
+  pruneStateMessages(state);
 
   if (!msg.fromBot) {
     state.msgSinceBotReply += 1;
@@ -138,8 +154,26 @@ function markIdlePrompted(chatId, threadId = 0) {
 }
 
 function pruneExpiredMessages() {
-  const cutoff = Date.now() - MESSAGE_TTL_HOURS * 60 * 60 * 1000;
+  const cutoff = messageCutoff();
   getDatabase().prepare('DELETE FROM messages WHERE ts < ?').run(cutoff);
+  for (const state of chats.values()) pruneStateMessages(state);
+}
+
+function clearConversation(chatId, threadId = 0) {
+  const key = conversationKey(chatId, threadId);
+  const db = getDatabase();
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    db.prepare('DELETE FROM messages WHERE chat_id = ? AND thread_id = ?')
+      .run(String(chatId), normalizeThreadId(threadId));
+    db.prepare('DELETE FROM conversation_state WHERE chat_id = ? AND thread_id = ?')
+      .run(String(chatId), normalizeThreadId(threadId));
+    db.exec('COMMIT');
+  } catch (error) {
+    db.exec('ROLLBACK');
+    throw error;
+  }
+  chats.delete(key);
 }
 
 module.exports = {
@@ -150,6 +184,7 @@ module.exports = {
   updateMessageText,
   markBotReplied,
   markIdlePrompted,
+  clearConversation,
   pruneExpiredMessages,
   MAX_HISTORY,
   MESSAGE_TTL_HOURS,

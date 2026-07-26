@@ -1,10 +1,8 @@
 const fs = require('fs');
 const readline = require('readline');
+const { AI_DEFAULTS, CHAT_DEFAULTS, STORAGE_DEFAULTS } = require('../src/defaults');
 
-const rl = readline.createInterface({
-  input: process.stdin,
-  output: process.stdout,
-});
+let rl = null;
 
 function ask(question) {
   return new Promise((resolve) => {
@@ -133,7 +131,8 @@ AI_MAX_CONTEXT_MESSAGES=${quoteEnv(config.maxContextMessages)}
 AI_MAX_INPUT_CHARS=${quoteEnv(config.maxInputChars)}
 AI_MAX_MESSAGE_CHARS=${quoteEnv(config.maxMessageChars)}
 AI_MAX_OUTPUT_TOKENS=${quoteEnv(config.maxOutputTokens)}
-AI_REQUEST_TIMEOUT_MS=30000
+AI_REQUEST_TIMEOUT_MS=${AI_DEFAULTS.requestTimeoutMs}
+AI_RESPONSE_MAX_BYTES=${AI_DEFAULTS.responseMaxBytes}
 
 # 多模态功能：确认接口和模型支持后再开启
 VISION_ENABLED=false
@@ -143,8 +142,12 @@ TRANSCRIPTION_BASE_URL=
 TRANSCRIPTION_API_KEY=
 TRANSCRIPTION_MODEL=whisper-1
 TRANSCRIPTION_LANGUAGE=zh
+TRANSCRIPTION_MAX_BYTES=20971520
+TRANSCRIPTION_RESPONSE_MAX_BYTES=1048576
+TRANSCRIPTION_TIMEOUT_MS=60000
 LINK_PREVIEW_ENABLED=false
 LINK_PREVIEW_MAX_BYTES=524288
+LINK_PREVIEW_TIMEOUT_MS=10000
 
 # TTS：部署后可在群里发送 /voice_on 开启
 TTS_ENABLED=false
@@ -157,6 +160,8 @@ TTS_API_KEY=
 TTS_RESPONSE_FORMAT=mp3
 TTS_REPLY_CHANCE=1
 TTS_TIMEOUT_MS=30000
+TTS_MAX_BYTES=10485760
+TTS_SPEED=1
 
 # 安全限制：只允许这些群使用机器人，多个群 ID 用英文逗号分隔；留空则不限制
 # 在群里发送 /chat_id 可以查看当前群 ID
@@ -174,15 +179,17 @@ STICKER_IDS=${quoteEnv(config.stickerIds)}
 STICKER_REPLY_CHANCE=${quoteEnv(config.stickerReplyChance)}
 DATA_DIR=/app/data
 DATABASE_PATH=/app/data/bot.db
-MESSAGE_TTL_HOURS=24
-USAGE_TTL_DAYS=30
+MESSAGE_TTL_HOURS=${STORAGE_DEFAULTS.messageTtlHours}
+USAGE_TTL_DAYS=${STORAGE_DEFAULTS.usageTtlDays}
+MAINTENANCE_INTERVAL_MINUTES=60
+SHUTDOWN_DRAIN_TIMEOUT_MS=15000
 TZ=Asia/Shanghai
 
 # 人设：留空则使用 src/persona.js 中的默认人设
 PERSONA_PROMPT=${quoteEnv(config.personaPrompt)}
 
 # 互动方式与规则扩展
-REACTION_ENABLED=true
+REACTION_ENABLED=${CHAT_DEFAULTS.reactionEnabled}
 RULE_COOLDOWN_SECONDS=60
 QUIET_HOURS_START=
 QUIET_HOURS_END=
@@ -205,6 +212,17 @@ IDLE_COOLDOWN_MINUTES=${quoteEnv(config.idleCooldownMinutes)}
 # 每个群最多缓存多少条历史消息作为上下文；真正发给 AI 的条数还会受 AI_MAX_CONTEXT_MESSAGES 限制
 MAX_HISTORY=${quoteEnv(config.maxHistory)}
 `;
+}
+
+function writeEnvFile(contents, targetPath = '.env') {
+  const tempPath = `${targetPath}.setup-${process.pid}`;
+  try {
+    fs.writeFileSync(tempPath, contents, { mode: 0o600 });
+    fs.renameSync(tempPath, targetPath);
+  } catch (err) {
+    fs.rmSync(tempPath, { force: true });
+    throw err;
+  }
 }
 
 async function main() {
@@ -338,97 +356,97 @@ async function main() {
     title: '13. 贴纸发送概率 STICKER_REPLY_CHANCE',
     description: 'AI 判断适合发贴纸时，实际发送贴纸的概率。0 表示不发，1 表示每次都发。建议 0.15。',
     question: '请输入贴纸发送概率，范围 0 到 1',
-    defaultValue: '0.15',
+    defaultValue: String(CHAT_DEFAULTS.stickerReplyChance),
     validate: (value) => isNumberInRange(value, 0, 1),
     error: '请输入 0 到 1 之间的数字，例如 0.15。',
   });
 
   const maxContextMessages = await askOptional({
-    title: '11. 省钱：上下文消息条数 AI_MAX_CONTEXT_MESSAGES',
+    title: '14. 省钱：上下文消息条数 AI_MAX_CONTEXT_MESSAGES',
     description: '每次请求最多带最近多少条聊天记录。越大越懂上下文，但越贵。建议 8-12。',
     question: '请输入每次请求最多带多少条上下文消息',
-    defaultValue: '12',
+    defaultValue: String(AI_DEFAULTS.maxContextMessages),
     validate: (value) => isIntegerText(value) && Number(value) >= 1,
     error: '请输入大于等于 1 的整数。',
   });
 
   const maxInputChars = await askOptional({
-    title: '12. 省钱：上下文总字符数 AI_MAX_INPUT_CHARS',
+    title: '15. 省钱：上下文总字符数 AI_MAX_INPUT_CHARS',
     description: '每次发给 AI 的聊天记录最多多少字符。越小越省钱。建议 1000-1500。',
     question: '请输入每次请求上下文最多多少字符',
-    defaultValue: '1500',
+    defaultValue: String(AI_DEFAULTS.maxInputChars),
     validate: (value) => isIntegerText(value) && Number(value) >= 200,
     error: '请输入大于等于 200 的整数。',
   });
 
   const maxMessageChars = await askOptional({
-    title: '13. 省钱：单条消息最大字符数 AI_MAX_MESSAGE_CHARS',
+    title: '16. 省钱：单条消息最大字符数 AI_MAX_MESSAGE_CHARS',
     description: '群友发很长一段话时，只截取前面一部分发给 AI。建议 120-160。',
     question: '请输入单条群消息最多保留多少字符',
-    defaultValue: '160',
+    defaultValue: String(AI_DEFAULTS.maxMessageChars),
     validate: (value) => isIntegerText(value) && Number(value) >= 20,
     error: '请输入大于等于 20 的整数。',
   });
 
   const maxOutputTokens = await askOptional({
-    title: '14. 省钱：输出上限 AI_MAX_OUTPUT_TOKENS',
+    title: '17. 省钱：输出上限 AI_MAX_OUTPUT_TOKENS',
     description: 'AI 每次最多输出多少 token。群聊机器人不需要长篇大论，建议 80-120。',
     question: '请输入 AI 每次最多输出多少 token',
-    defaultValue: '120',
+    defaultValue: String(AI_DEFAULTS.maxOutputTokens),
     validate: (value) => isIntegerText(value) && Number(value) >= 20,
     error: '请输入大于等于 20 的整数。',
   });
 
   const randomReplyChance = await askOptional({
-    title: '15. 随机插话概率 RANDOM_REPLY_CHANCE',
-    description: '普通群聊时机器人随机插话的概率。越大越活跃，也越吵、越费钱。建议 0.02；不要像 0.8 那样太高。',
+    title: '18. 随机插话概率 RANDOM_REPLY_CHANCE',
+    description: '普通群聊时机器人随机插话的概率。越大越活跃，也越吵、越费钱。建议 0.05；不要像 0.8 那样太高。',
     question: '请输入随机插话概率，范围 0 到 1',
-    defaultValue: '0.02',
+    defaultValue: String(CHAT_DEFAULTS.randomChance),
     validate: (value) => isNumberInRange(value, 0, 1),
     error: '请输入 0 到 1 之间的数字，例如 0.02。',
   });
 
   const minReplyIntervalSeconds = await askOptional({
-    title: '16. 主动发言冷却 MIN_REPLY_INTERVAL_SECONDS',
-    description: '两次主动发言之间至少隔多少秒。越大越省钱，也越不吵。建议 180。',
+    title: '19. 主动发言冷却 MIN_REPLY_INTERVAL_SECONDS',
+    description: '两次主动发言之间至少隔多少秒。越大越省钱，也越不吵。建议 60。',
     question: '请输入两次主动发言最少间隔秒数',
-    defaultValue: '180',
+    defaultValue: String(CHAT_DEFAULTS.minReplyIntervalSeconds),
     validate: (value) => isIntegerText(value) && Number(value) >= 0,
     error: '请输入大于等于 0 的整数。',
   });
 
   const minMsgsBetweenReplies = await askOptional({
-    title: '17. 消息间隔 MIN_MSGS_BETWEEN_REPLIES',
-    description: '机器人说完话后，至少再过多少条群消息才会考虑随机插话。建议 5。',
+    title: '20. 消息间隔 MIN_MSGS_BETWEEN_REPLIES',
+    description: '机器人说完话后，至少再过多少条群消息才会考虑随机插话。建议 3。',
     question: '请输入距离上次发言至少间隔多少条群消息',
-    defaultValue: '5',
+    defaultValue: String(CHAT_DEFAULTS.minMsgsBetweenReplies),
     validate: (value) => isIntegerText(value) && Number(value) >= 0,
     error: '请输入大于等于 0 的整数。',
   });
 
   const idleThresholdMinutes = await askOptional({
-    title: '18. 冷场阈值 IDLE_THRESHOLD_MINUTES',
-    description: '群里安静多久后机器人尝试主动抛话题。建议 30 分钟。',
+    title: '21. 冷场阈值 IDLE_THRESHOLD_MINUTES',
+    description: '群里安静多久后机器人尝试主动抛话题。建议 20 分钟。',
     question: '请输入群里安静多少分钟后尝试主动抛话题',
-    defaultValue: '30',
+    defaultValue: String(CHAT_DEFAULTS.idleThresholdMinutes),
     validate: (value) => isIntegerText(value) && Number(value) >= 1,
     error: '请输入大于等于 1 的整数。',
   });
 
   const idleCooldownMinutes = await askOptional({
-    title: '19. 冷场发言冷却 IDLE_COOLDOWN_MINUTES',
-    description: '两次冷场主动发言之间至少隔多少分钟。建议 120 分钟。',
+    title: '22. 冷场发言冷却 IDLE_COOLDOWN_MINUTES',
+    description: '两次冷场主动发言之间至少隔多少分钟。建议 60 分钟。',
     question: '请输入两次冷场发言之间最少间隔多少分钟',
-    defaultValue: '120',
+    defaultValue: String(CHAT_DEFAULTS.idleCooldownMinutes),
     validate: (value) => isIntegerText(value) && Number(value) >= 1,
     error: '请输入大于等于 1 的整数。',
   });
 
   const maxHistory = await askOptional({
-    title: '20. 内存历史 MAX_HISTORY',
-    description: '每个群在内存里最多保存多少条历史消息。它不等于每次都发给 AI；真正发给 AI 的数量受 AI_MAX_CONTEXT_MESSAGES 限制。建议 25。',
-    question: '请输入每个群最多缓存多少条历史消息',
-    defaultValue: '25',
+    title: '23. 短期历史 MAX_HISTORY',
+    description: '每个群或 Topic 在 SQLite 和内存中最多保留多少条短期历史。真正发给 AI 的数量仍受 AI_MAX_CONTEXT_MESSAGES 限制。建议 40。',
+    question: '请输入每个群或 Topic 最多保留多少条短期消息',
+    defaultValue: String(STORAGE_DEFAULTS.maxHistory),
     validate: (value) => isIntegerText(value) && Number(value) >= 1,
     error: '请输入大于等于 1 的整数。',
   });
@@ -459,17 +477,30 @@ async function main() {
     maxHistory,
   });
 
-  const tempEnvPath = `.env.setup-${process.pid}`;
-  fs.writeFileSync(tempEnvPath, env, { mode: 0o600 });
-  fs.renameSync(tempEnvPath, '.env');
+  writeEnvFile(env);
   console.log('\n✅ 配置完成，已生成 .env。');
   console.log('现在可以执行：');
   console.log('docker compose up -d --build');
 }
 
-main()
-  .catch((err) => {
-    console.error('配置失败:', err.message);
-    process.exitCode = 1;
-  })
-  .finally(() => rl.close());
+if (require.main === module) {
+  rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  main()
+    .catch((err) => {
+      console.error('配置失败:', err.message);
+      process.exitCode = 1;
+    })
+    .finally(() => rl.close());
+}
+
+module.exports = {
+  normalizeBaseUrl,
+  quoteEnv,
+  isValidUrl,
+  isIntegerText,
+  isNumberInRange,
+  isCommaSeparatedIds,
+  isCommaSeparatedChatIds,
+  buildEnv,
+  writeEnvFile,
+};

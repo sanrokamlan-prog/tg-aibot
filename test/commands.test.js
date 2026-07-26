@@ -11,4 +11,5 @@ test('registers all Telegram command and callback handlers', () => {
   assert.doesNotThrow(() => registerCommands(bot, () => ({ id: 1, username: 'test_bot' })));
   assert.ok(BOT_COMMANDS.some((item) => item.command === 'ai_panel'));
   assert.ok(BOT_COMMANDS.some((item) => item.command === 'usage'));
+  assert.ok(BOT_COMMANDS.some((item) => item.command === 'context_clear'));
 });

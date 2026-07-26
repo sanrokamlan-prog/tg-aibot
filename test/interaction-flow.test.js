@@ -15,12 +15,13 @@ process.env.TYPING_DELAY_MAX_MS = '0';
 const { createInteractionService } = require('../src/interactionService');
 const { getChat, pushMessage } = require('../src/contextStore');
 const { closeDatabase } = require('../src/database');
+const { addRule } = require('../src/ruleStore');
 
 let decision = { action: 'reaction', reaction: '👍', reply: '' };
 let nextMessageId = 100;
 
 function makeContext({ chatId, messageId, text, entities = [] }) {
-  const calls = { reactions: [], replies: [] };
+  const calls = { reactions: [], replies: [], deletes: 0 };
   const ctx = {
     chat: { id: chatId, type: 'supergroup' },
     from: { id: 7, username: 'tester' },
@@ -29,6 +30,7 @@ function makeContext({ chatId, messageId, text, entities = [] }) {
       callApi: async (method, payload) => { calls.reactions.push({ method, payload }); },
     },
     sendChatAction: async () => {},
+    deleteMessage: async () => { calls.deletes += 1; },
     reply: async (replyText, extra) => {
       calls.replies.push({ text: replyText, extra });
       return { message_id: nextMessageId += 1 };
@@ -82,6 +84,24 @@ test('runs reaction, quoted mention reply, and one-shot idle flows', async () =>
     await service.runIdleCheck();
     await service.runIdleCheck();
     assert.equal(idleMessages.filter((item) => item.chatId === -301).length, 1);
+
+    addRule(-303, 'block', '广告', '请勿发广告');
+    const blocked = makeContext({ chatId: -303, messageId: 4, text: '广告内容' });
+    await service.handleMessage(blocked.ctx);
+    assert.equal(blocked.calls.deletes, 1);
+    assert.equal(getChat(-303, 0).messages.length, 0);
+
+    pushMessage(-304, 1, {
+      user: 'topic-user', text: 'topic 1', ts: Date.now() - 2 * 60 * 1000,
+      fromBot: false, telegramMessageId: 20,
+    });
+    pushMessage(-304, 2, {
+      user: 'topic-user', text: 'topic 2', ts: Date.now() - 2 * 60 * 1000,
+      fromBot: false, telegramMessageId: 21,
+    });
+    decision = { action: 'reply', reply: '每轮只唤醒一个话题', reaction: '👍' };
+    await service.runIdleCheck();
+    assert.equal(idleMessages.filter((item) => item.chatId === -304).length, 1);
   } finally {
     global.fetch = originalFetch;
     Math.random = originalRandom;

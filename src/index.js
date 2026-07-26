@@ -1,11 +1,13 @@
 require('dotenv').config();
 const { Telegraf } = require('telegraf');
 const { getAllowedChatIds } = require('./access');
+const { beginChatAiShutdown, waitForChatAiIdle } = require('./chatAiLock');
 const { registerCommands, BOT_COMMANDS } = require('./commands');
-const { pruneExpiredMessages } = require('./contextStore');
 const { closeDatabase, getDatabase } = require('./database');
+const { envInt } = require('./env');
 const { startIdleScheduler } = require('./idleScheduler');
 const { createInteractionService } = require('./interactionService');
+const { runMaintenance, startMaintenanceScheduler } = require('./maintenance');
 
 if (!process.env.BOT_TOKEN) {
   throw new Error('缺少 BOT_TOKEN');
@@ -14,6 +16,8 @@ if (!process.env.BOT_TOKEN) {
 const bot = new Telegraf(process.env.BOT_TOKEN);
 let botInfo = null;
 let stopIdleScheduler = null;
+let stopMaintenanceScheduler = null;
+let shuttingDown = false;
 const interactionService = createInteractionService(bot, () => botInfo);
 
 registerCommands(bot, () => botInfo);
@@ -25,7 +29,7 @@ bot.catch((error, ctx) => {
 
 async function main() {
   getDatabase();
-  pruneExpiredMessages();
+  runMaintenance();
   botInfo = await bot.telegram.getMe();
   await bot.telegram.setMyCommands(BOT_COMMANDS);
   if (!getAllowedChatIds().length) {
@@ -33,13 +37,24 @@ async function main() {
   }
   await bot.launch();
   stopIdleScheduler = startIdleScheduler(interactionService.runIdleCheck);
+  stopMaintenanceScheduler = startMaintenanceScheduler();
   console.log(`机器人已启动: @${botInfo.username} (${botInfo.id})`);
 }
 
 async function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
   stopIdleScheduler?.();
-  bot.stop(signal);
-  closeDatabase();
+  stopMaintenanceScheduler?.();
+  beginChatAiShutdown();
+  try {
+    bot.stop(signal);
+  } catch (error) {
+    console.warn(`停止 Telegram Bot 时忽略状态错误: ${error.message}`);
+  }
+  const drained = await waitForChatAiIdle(envInt('SHUTDOWN_DRAIN_TIMEOUT_MS', 15000));
+  if (drained) closeDatabase();
+  else console.warn('停机等待 AI 请求超时，将保持数据库可用并由容器停止剩余任务。');
 }
 
 main().catch((error) => {
@@ -48,8 +63,8 @@ main().catch((error) => {
   process.exit(1);
 });
 
-process.once('SIGINT', () => shutdown('SIGINT'));
-process.once('SIGTERM', () => shutdown('SIGTERM'));
+process.once('SIGINT', () => shutdown('SIGINT').catch((error) => console.error('停机失败:', error.message)));
+process.once('SIGTERM', () => shutdown('SIGTERM').catch((error) => console.error('停机失败:', error.message)));
 process.on('unhandledRejection', (error) => {
   console.error('未处理 Promise 异常:', error?.message || error);
 });

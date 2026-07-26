@@ -13,6 +13,9 @@ services:
       - /tmp:size=64m
     security_opt:
       - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 100
     stop_grace_period: 20s
     logging:
       driver: "json-file"

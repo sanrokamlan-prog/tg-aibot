@@ -1,5 +1,3 @@
-
-
 <div align="center">
 
 # tg-aibot
@@ -50,18 +48,18 @@ reply    发送文字，或在开启后发送 TTS 语音
 
 | 模块 | 能力 | 默认状态 |
 | --- | --- | --- |
-| 上下文 | 群与 Topic 隔离、SQLite 持久化、TTL 自动清理 | 开启 |
+| 上下文 | 群与 Topic 隔离、SQLite 持久化、严格 TTL 定期清理、手动清除 | 开启 |
 | 触发策略 | 被提及、随机插话、冷场复活、自适应概率、安静时段 | 开启 |
 | 互动动作 | `silent`、Reaction、贴纸、文字回复 | 开启 |
 | 模型路由 | 被提及、随机、冷场可分别指定模型 | 开启 |
-| 接口容错 | 请求超时、群级防并发、主备 AI 自动切换 | 开启 |
+| 接口容错 | 请求与响应限制、群级防并发、主备 AI 自动切换、停机排空 | 开启 |
 | 群管理 | Inline 面板、活跃度预设、群级参数持久化 | 开启 |
 | 人设 | 全局基础人设 + 每个群最多 30 条附加规则 | 开启 |
 | 关键词规则 | 固定回复、删除匹配消息、独立通知冷却 | 开启 |
 | 用量 | 24 小时请求量、成功数、字符数和平均延迟 | 开启 |
 | 图片理解 | 将触发消息中的图片交给视觉模型 | 关闭 |
 | 语音转写 | OpenAI 兼容 `/audio/transcriptions` | 关闭 |
-| 链接摘要 | 安全读取首个公网链接，拒绝内网地址 | 关闭 |
+| 链接摘要 | 安全读取首个公网链接，校验并固定公网解析地址 | 关闭 |
 | TTS | Edge 免费语音或 OpenAI 兼容 `/audio/speech` | 关闭 |
 | 迁移 | 一键导出/恢复 `.env` 与 Docker 数据卷 | 可用 |
 
@@ -282,6 +280,7 @@ docker compose up -d --build
 | `AI_MODEL_RANDOM` | 空 | 随机插话专用模型；空值继承默认模型 |
 | `AI_MODEL_IDLE` | 空 | 冷场复活专用模型；空值继承默认模型 |
 | `AI_REQUEST_TIMEOUT_MS` | `30000` | 单次 AI 请求超时 |
+| `AI_RESPONSE_MAX_BYTES` | `1048576` | AI HTTP 响应体最大字节数 |
 | `AI_DISABLE_RESPONSE_STORAGE` | `true` | Responses API 请求附带 `store: false` |
 | `AI_CHAT_TOKEN_FIELD` | `max_tokens` | Chat Completions 的输出 token 字段名 |
 
@@ -298,7 +297,7 @@ AI_FALLBACK_MODEL=gpt-4o-mini
 
 主接口出现以下情况时会尝试备用接口：
 
-- HTTP `429`
+- HTTP `408/409/425/429`
 - HTTP `5xx`
 - 网络连接错误
 - 请求超时
@@ -350,13 +349,17 @@ TRANSCRIPTION_BASE_URL=https://api.example.com/v1
 TRANSCRIPTION_API_KEY=sk-xxxxxx
 TRANSCRIPTION_MODEL=whisper-1
 TRANSCRIPTION_LANGUAGE=zh
+TRANSCRIPTION_MAX_BYTES=20971520
+TRANSCRIPTION_RESPONSE_MAX_BYTES=1048576
+TRANSCRIPTION_TIMEOUT_MS=60000
 
 # 读取触发消息中的第一个公网链接
 LINK_PREVIEW_ENABLED=true
 LINK_PREVIEW_MAX_BYTES=524288
+LINK_PREVIEW_TIMEOUT_MS=10000
 ```
 
-未单独填写转写地址或 Key 时，会尝试复用主 AI 配置。链接读取会检查 DNS 解析结果和重定向目标，默认拒绝回环、私有和保留地址。
+未单独填写转写地址或 Key 时，会尝试复用主 AI 配置。链接读取会检查全部 DNS 结果，拒绝回环、私有和保留地址，并通过自定义 dispatcher 将请求固定到已经验证的地址；每次重定向都会重新解析和校验，降低 DNS rebinding 风险。
 
 > [!CAUTION]
 > 开启多模态后，相应图片、语音转写结果或网页摘要会发送给配置的 AI 服务。启用前应确认群成员知情，并评估所用接口的隐私政策。
@@ -384,6 +387,8 @@ TTS_OPENAI_VOICE=alloy
 TTS_RESPONSE_FORMAT=mp3
 TTS_REPLY_CHANCE=1
 TTS_TIMEOUT_MS=30000
+TTS_MAX_BYTES=10485760
+TTS_SPEED=1
 ```
 
 `TTS_ENABLED` 决定尚未保存群配置时的语音默认状态。更稳妥的做法是保持 `false`，再由管理员在需要语音的群发送 `/voice_on`；该命令会覆盖当前群设置。生成语音失败时会自动回退到文字回复。
@@ -394,6 +399,8 @@ TTS_TIMEOUT_MS=30000
 | --- | --- | --- |
 | `DATA_DIR` | `/app/data` | 持久化数据目录 |
 | `DATABASE_PATH` | `/app/data/bot.db` | SQLite 数据库路径 |
+| `MAINTENANCE_INTERVAL_MINUTES` | `60` | 物理清理过期消息/用量并优化 SQLite 的间隔 |
+| `SHUTDOWN_DRAIN_TIMEOUT_MS` | `15000` | 停机时等待在途 AI 请求完成的最长时间 |
 
 Docker Compose 使用命名卷 `tg-ai-bot-data` 保存：
 
@@ -404,7 +411,7 @@ Docker Compose 使用命名卷 `tg-ai-bot-data` 保存：
 - 关键词规则
 - AI 用量统计
 
-SQLite 使用 WAL 模式。容器重建不会删除命名卷；不要使用 `docker compose down -v`，除非明确要删除全部机器人数据。
+SQLite 使用 WAL 模式。启动时和运行期间会定期清理过期消息、用量记录并执行 `PRAGMA optimize`。容器重建不会删除命名卷；不要使用 `docker compose down -v`，除非明确要删除全部机器人数据。
 
 ## 管理命令
 
@@ -428,6 +435,7 @@ SQLite 使用 WAL 模式。容器重建不会删除命名卷；不要使用 `doc
 | `/ai_test` | 测试当前群 AI 接口并显示模型与 Provider |
 | `/ai_on` / `/ai_off` | 开启或关闭当前群 AI 互动 |
 | `/voice_on` / `/voice_off` | 开启或关闭当前群 TTS 回复 |
+| `/context_clear` | 清除当前 Topic 短期上下文，不影响群配置、人设、规则和贴纸 |
 | `/usage` | 查看最近 24 小时请求统计 |
 | `/extensions` | 查看已加载扩展模块 |
 
@@ -528,9 +536,9 @@ AI 会根据语境选择贴纸标签，再按当前群的 `sticker_chance` 决�
 
 ## 升级与迁移
 
-### 从 1.x 原地升级到 2.0
+### 从 1.x 原地升级到 2.x
 
-2.0 继续使用原命名卷 `tg-ai-bot-data`。首次启动会自动将旧版 `chat-config.json` 和 `stickers.json` 导入 SQLite，旧 JSON 文件保留不删。
+2.x 继续使用原命名卷 `tg-ai-bot-data`。首次启动会自动将旧版 `chat-config.json` 和 `stickers.json` 导入 SQLite，旧 JSON 文件保留不删。
 
 ```bash
 cd ~/tg-aibot
@@ -632,8 +640,10 @@ Docker Compose 默认启用：
 - 只读容器根文件系统
 - `/tmp` 独立内存文件系统与容量限制
 - `no-new-privileges`
+- 删除全部 Linux capabilities，并限制容器最多 100 个进程
 - PID 1 init 进程
 - 20 秒优雅停止时间
+- 停机时拒绝新 AI 请求，并等待在途请求完成后再关闭 SQLite
 - 单文件 10 MB、最多 3 个日志文件轮转
 - `/app/data` 独立持久化命名卷
 
@@ -670,8 +680,10 @@ docker compose logs --tail=200
 - `ALLOWED_CHAT_IDS` 可以限制机器人只服务指定群。
 - 管理操作要求 Telegram 群管理员或手动管理员白名单。
 - AI 请求有超时，同群请求有并发锁并在 `finally` 中释放。
-- 链接读取默认拒绝回环、私有和保留地址，并重新验证重定向目标。
-- 媒体下载和链接正文设置大小上限与超时。
+- 链接读取默认拒绝回环、私有和保留地址，固定已验证 DNS 结果，并重新验证重定向目标。
+- AI、媒体、转写、TTS 和链接正文均设置响应大小上限与超时。
+- 外部链接正文在提示词中明确标记为不可信资料，不作为系统指令执行。
+- 被关键词规则处理的消息不会写入后续 AI 上下文。
 - SQLite 使用事务迁移，旧 JSON 自动导入但不会删除。
 - 迁移导入校验压缩包路径和允许文件清单。
 - `.env`、数据库和迁移备份都不会进入 Git 版本控制。
@@ -688,7 +700,7 @@ docker compose logs --tail=200
 
 ## 数据与隐私
 
-机器人保存的是带 TTL 的短期上下文，不是永久群记忆：
+机器人保存的是带 TTL 的短期上下文，不是永久群记忆。过期数据会在启动时以及默认每小时从内存和 SQLite 中物理清理：
 
 - 默认每个群/Topic 最多 40 条消息
 - 默认消息最多保留 24 小时
@@ -709,16 +721,22 @@ docker compose run --rm --no-deps --entrypoint sh tg-ai-bot -c 'ls -lah /app/dat
 tg-aibot/
 ├── src/
 │   ├── index.js               启动与生命周期
-│   ├── interactionService.js  消息触发和动作发送
-│   ├── ai.js                  模型请求、路由与主备切换
-│   ├── commands.js            群管理命令和 Inline 面板
+│   ├── interactionService.js  消息生命周期与触发编排
+│   ├── decisionDelivery.js    Reaction、贴纸、文字和语音投递
+│   ├── ai.js                  主备 Provider 编排
+│   ├── aiClient.js            OpenAI 协议、HTTP 与模型路由
+│   ├── aiPrompt.js            提示词、上下文裁剪与决策解析
+│   ├── commands/              按领域拆分的群管理命令
 │   ├── database.js            SQLite Schema 与旧数据导入
 │   ├── contextStore.js        Topic 上下文与 TTL
+│   ├── defaults.js            运行时与配置向导共享默认值
+│   ├── maintenance.js         定期保留期清理与 SQLite 优化
 │   ├── mediaContext.js        图片、转写和链接上下文
 │   ├── tts.js                 Edge/OpenAI 语音生成
 │   └── extensions/            消息扩展模块
 ├── scripts/
 │   ├── setup-env.js           交互式配置
+│   ├── check-js.js            跨平台 JavaScript 语法检查
 │   └── migrate.sh             备份与跨服务器迁移
 ├── test/                      Node.js 行为测试
 ├── docker-compose.yml
@@ -732,14 +750,15 @@ tg-aibot/
 
 ```bash
 npm ci
+npm run check
 npm test
+npm run test:coverage
 npm audit --omit=dev
 ```
 
 额外检查：
 
 ```bash
-node --check src/index.js
 sh -n scripts/migrate.sh
 docker build -t tg-aibot:test .
 ```
@@ -747,11 +766,13 @@ docker build -t tg-aibot:test .
 GitHub Actions 会在 `main` 推送和 Pull Request 时执行：
 
 1. `npm ci`
-2. `npm test`
-3. 迁移脚本语法检查
-4. Docker 镜像构建
+2. 全部 JavaScript 文件语法检查
+3. `npm test`
+4. 生产依赖安全审计
+5. 迁移脚本语法检查
+6. Docker 镜像构建
 
-当前测试覆盖 AI 请求超时、群级防并发、SQLite 旧数据迁移、四种互动动作、直接提及、冷场单次触发、关键词删除、多模态辅助函数、TTS、Reaction 和 Topic 交互链路。
+Dependabot 每月检查 npm、Docker 基础镜像和 GitHub Actions 更新。当前测试覆盖 AI 请求超时与主备切换、停机排空、SQLite 旧数据迁移与严格 TTL、配置归一化、四种互动动作、直接提及、每群单次冷场触发、关键词删除不入上下文、链接 DNS 固定、响应大小限制、TTS、Reaction 和 Topic 清理/隔离。
 
 ## 适用范围
 

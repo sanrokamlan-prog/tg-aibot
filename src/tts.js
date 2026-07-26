@@ -2,8 +2,9 @@ const fs = require('fs/promises');
 const os = require('os');
 const path = require('path');
 const { EdgeTTS } = require('node-edge-tts');
-const { normalizeBaseUrl } = require('./ai');
+const { normalizeBaseUrl } = require('./aiClient');
 const { envInt, envNumber } = require('./env');
+const { fetchBuffer } = require('./http');
 
 async function edgeSpeech(text) {
   const filename = path.join(
@@ -19,7 +20,10 @@ async function edgeSpeech(text) {
 
   try {
     await tts.ttsPromise(text, filename);
-    return { buffer: await fs.readFile(filename), filename: 'reply.mp3' };
+    const buffer = await fs.readFile(filename);
+    const maxBytes = envInt('TTS_MAX_BYTES', 10 * 1024 * 1024);
+    if (buffer.length > maxBytes) throw new Error(`TTS 音频超过 ${maxBytes} 字节限制`);
+    return { buffer, filename: 'reply.mp3' };
   } finally {
     await fs.unlink(filename).catch(() => {});
   }
@@ -31,35 +35,21 @@ async function openAiSpeech(text) {
   const base = normalizeBaseUrl(process.env.TTS_BASE_URL || process.env.AI_BASE_URL);
   const url = process.env.TTS_API_URL || `${base}/audio/speech`;
   const format = process.env.TTS_RESPONSE_FORMAT || 'mp3';
-  const controller = new AbortController();
   const timeoutMs = envInt('TTS_TIMEOUT_MS', 30000);
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-
-  try {
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-      body: JSON.stringify({
-        model: process.env.TTS_MODEL || 'gpt-4o-mini-tts',
-        voice: process.env.TTS_OPENAI_VOICE || 'alloy',
-        input: text,
-        response_format: format,
-        speed: envNumber('TTS_SPEED', 1, { min: 0.25, max: 4 }),
-        ...(process.env.TTS_INSTRUCTIONS ? { instructions: process.env.TTS_INSTRUCTIONS } : {}),
-      }),
-      signal: controller.signal,
-    });
-    if (!response.ok) {
-      const body = (await response.text()).replace(/\s+/g, ' ').slice(0, 500);
-      throw new Error(`TTS 接口错误 ${response.status}: ${body}`);
-    }
-    return { buffer: Buffer.from(await response.arrayBuffer()), filename: `reply.${format}` };
-  } catch (error) {
-    if (error.name === 'AbortError') throw new Error(`TTS 请求超时（${timeoutMs}ms）`);
-    throw error;
-  } finally {
-    clearTimeout(timeoutId);
-  }
+  const { buffer } = await fetchBuffer(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify({
+      model: process.env.TTS_MODEL || 'gpt-4o-mini-tts',
+      voice: process.env.TTS_OPENAI_VOICE || 'alloy',
+      input: text,
+      response_format: format,
+      speed: envNumber('TTS_SPEED', 1, { min: 0.25, max: 4 }),
+      ...(process.env.TTS_INSTRUCTIONS ? { instructions: process.env.TTS_INSTRUCTIONS } : {}),
+    }),
+    timeoutMs,
+  }, envInt('TTS_MAX_BYTES', 10 * 1024 * 1024));
+  return { buffer, filename: `reply.${format}` };
 }
 
 async function textToSpeech(text) {

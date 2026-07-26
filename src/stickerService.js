@@ -20,8 +20,8 @@ function pickStickerId(chatId, tag = '') {
   return pool[Math.floor(Math.random() * pool.length)].fileId;
 }
 
-function shouldSendSticker(chatId) {
-  return Math.random() <= getChatConfig(chatId).stickerReplyChance;
+function shouldSendSticker(chatId, random = Math.random) {
+  return random() < getChatConfig(chatId).stickerReplyChance;
 }
 
 async function sendStickerForContext(ctx, tag = '', { quote = false } = {}) {
@@ -38,4 +38,10 @@ async function sendStickerToChat(bot, chatId, threadId, tag = '') {
   return bot.telegram.sendSticker(chatId, stickerId, threadExtra(threadId));
 }
 
-module.exports = { getStickerTags, pickStickerId, sendStickerForContext, sendStickerToChat };
+module.exports = {
+  getStickerTags,
+  pickStickerId,
+  shouldSendSticker,
+  sendStickerForContext,
+  sendStickerToChat,
+};

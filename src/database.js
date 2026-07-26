@@ -98,6 +98,10 @@ function migrate(db) {
     `),
   ];
 
+  if (currentVersion > migrations.length) {
+    throw new Error(`数据库版本 ${currentVersion} 高于当前程序支持的版本 ${migrations.length}`);
+  }
+
   for (let version = currentVersion + 1; version <= migrations.length; version += 1) {
     db.exec('BEGIN IMMEDIATE');
     try {

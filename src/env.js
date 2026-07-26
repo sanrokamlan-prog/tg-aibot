@@ -4,7 +4,9 @@ function envInt(name, defaultValue, { min = 1 } = {}) {
 }
 
 function envNumber(name, defaultValue, { min = -Infinity, max = Infinity } = {}) {
-  const value = Number(process.env[name] ?? defaultValue);
+  const raw = process.env[name];
+  if (raw == null || raw.trim() === '') return defaultValue;
+  const value = Number(raw);
   return Number.isFinite(value) && value >= min && value <= max ? value : defaultValue;
 }
 

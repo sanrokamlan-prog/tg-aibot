@@ -1,21 +1,24 @@
 {
   "name": "tg-ai-bot",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "private": true,
   "description": "Telegram 群组 AI 气氛活跃机器人",
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
     "setup": "node scripts/setup-env.js",
-    "test": "node --test"
+    "check": "node scripts/check-js.js",
+    "test": "node --test",
+    "test:coverage": "node --test --experimental-test-coverage"
   },
   "engines": {
     "node": ">=24.15"
   },
   "dependencies": {
     "cheerio": "^1.1.2",
+    "dotenv": "^16.4.5",
     "node-edge-tts": "^1.2.10",
     "telegraf": "^4.16.3",
-    "dotenv": "^16.4.5"
+    "undici": "^7.29.0"
   }
 }
