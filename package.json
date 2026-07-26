@@ -19,6 +19,6 @@
     "dotenv": "^16.4.5",
     "node-edge-tts": "^1.2.10",
     "telegraf": "^4.16.3",
-    "undici": "^7.29.0"
+    "undici": "^8.9.0"
   }
 }
