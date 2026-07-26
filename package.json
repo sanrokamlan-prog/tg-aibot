@@ -16,7 +16,7 @@
   },
   "dependencies": {
     "cheerio": "^1.1.2",
-    "dotenv": "^16.4.5",
+    "dotenv": "^17.4.2",
     "node-edge-tts": "^1.2.10",
     "telegraf": "^4.16.3",
     "undici": "^7.29.0"
