@@ -31,10 +31,12 @@ jobs:
       # Exercise the real Linux/musl CLI installation as the unprivileged app user.
       # Model generation has external free-tier quotas, so CI checks installation and catalog only.
       - name: OpenCode Linux container smoke test
-        run: >-
-          docker run --rm --read-only --init
-          --tmpfs /app/data:rw,uid=1000,gid=1000,size=2g
-          --tmpfs /tmp:rw,size=512m
-          --cap-drop ALL --security-opt no-new-privileges
-          -e DATA_DIR=/app/data
-          tg-aibot:test npm run opencode:smoke
+        run: |
+          app_uid="$(docker run --rm --entrypoint id tg-aibot:test -u)"
+          app_gid="$(docker run --rm --entrypoint id tg-aibot:test -g)"
+          docker run --rm --read-only --init \
+            --tmpfs "/app/data:rw,uid=$app_uid,gid=$app_gid,size=2g" \
+            --tmpfs /tmp:rw,size=512m \
+            --cap-drop ALL --security-opt no-new-privileges \
+            -e DATA_DIR=/app/data \
+            tg-aibot:test npm run opencode:smoke

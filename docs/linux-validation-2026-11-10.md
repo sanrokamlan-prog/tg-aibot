@@ -1,5 +1,7 @@
 # Linux 部署与 OpenCode 调用验证（2026-11-10）
 
+本文记录 OpenCode 接入阶段的历史验证；其中 49 项测试发生在自然对话改造之前。当前版本增加了 17 项自然对话测试，完整提交的 Linux 测试、镜像构建和 CLI 安装结果以对应的 [GitHub Actions](https://github.com/sanrokamlan-prog/tg-aibot/actions/workflows/ci.yml) 为准。
+
 测试机器：用户授权的局域网 Ubuntu x86_64 主机。
 
 项目部署在 `/opt/tg-aibot-test-20261110`，使用目录内的官方 Node.js 24.15.0，不替换系统运行时。Node 压缩包已对照官方 SHASUMS256.txt 校验。现有 OpenCode 为 `/root/.opencode/bin/opencode`，版本 2.2.6。
