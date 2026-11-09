@@ -10,6 +10,8 @@ process.env.AI_FALLBACK_API_KEY = 'fallback-key';
 process.env.AI_FALLBACK_MODEL = 'fallback-model';
 
 const { decideAndReply } = require('../src/ai');
+const { providerRouter } = require('../src/providerPool');
+test.beforeEach(() => providerRouter.reset());
 
 test('aborts an AI request after the configured timeout', async () => {
   const originalFetch = global.fetch;

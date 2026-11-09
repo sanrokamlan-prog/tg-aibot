@@ -96,6 +96,35 @@ function migrate(db) {
       );
       CREATE INDEX idx_ai_usage_chat_ts ON ai_usage(chat_id, ts DESC);
     `),
+    () => db.exec(`
+      CREATE TABLE conversation_memories (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        chat_id TEXT NOT NULL,
+        thread_id TEXT NOT NULL DEFAULT '0',
+        text TEXT NOT NULL,
+        expires_at INTEGER NOT NULL
+      );
+      CREATE INDEX idx_memories_topic ON conversation_memories(chat_id, thread_id, id DESC);
+      CREATE INDEX idx_memories_expiry ON conversation_memories(expires_at);
+    `),
+    () => db.exec(`
+      ALTER TABLE messages ADD COLUMN sender_id TEXT;
+      ALTER TABLE messages ADD COLUMN learning_eligible INTEGER NOT NULL DEFAULT 0;
+      CREATE TABLE learned_expressions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        chat_id TEXT NOT NULL,
+        thread_id TEXT NOT NULL DEFAULT '0',
+        expression TEXT NOT NULL,
+        situation TEXT NOT NULL,
+        source_message_id INTEGER NOT NULL,
+        observations INTEGER NOT NULL DEFAULT 1,
+        updated_at INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL,
+        UNIQUE(chat_id, thread_id, expression)
+      );
+      CREATE INDEX idx_expressions_topic ON learned_expressions(chat_id, thread_id, updated_at DESC);
+      CREATE INDEX idx_expressions_expiry ON learned_expressions(expires_at);
+    `),
   ];
 
   if (currentVersion > migrations.length) {

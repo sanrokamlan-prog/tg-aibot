@@ -25,11 +25,15 @@ tg-aibot 使用 Telegram 长轮询接收群消息，通过 OpenAI 兼容接口�
 
 ## 为什么它不像普通聊天机器人
 
+自然对话现已支持连续文字合并、短时间内免 @ 接话、按群友表达节奏调整语气，以及有原消息可核对的表达学习。配置和部署后的验收方法见 [自然对话说明](docs/natural-conversation.md)。
+
 | 场景 | 行为 |
 | --- | --- |
 | 群友 `@机器人` 或回复机器人 | 必须尝试给出有效回复，并引用原消息 |
 | 普通群聊 | 满足冷却、消息间隔和概率后才触发；聊天越密集，插话概率越低 |
-| 群聊冷场 | 超过阈值后主动抛出一次话题；同一轮对话不会反复自言自语 |
+| 正在与你聊天 | 同一人短时间继续发言可免 @ 接话；简单致谢收住，不追着别人聊 |
+| 连续补充 | 短暂等待同一人的连续文字，合起来理解；生成中的补充会进入下一轮 |
+| 群聊冷场 | 有自然后续才发言，也可以安静旁观；同一轮对话不会反复自言自语 |
 | 只需要轻量回应 | AI 可以选择 Telegram Reaction 或匹配语境的贴纸 |
 | 没有值得回应的内容 | AI 可以选择 `silent`，不发送消息 |
 | Telegram Forum Topic | 每个 Topic 独立保存上下文，不会跨话题串线 |
@@ -49,12 +53,16 @@ reply    发送文字，或在开启后发送 TTS 语音
 | 模块 | 能力 | 默认状态 |
 | --- | --- | --- |
 | 上下文 | 群与 Topic 隔离、SQLite 持久化、严格 TTL 定期清理、手动清除 | 开启 |
-| 触发策略 | 被提及、随机插话、冷场复活、自适应概率、安静时段 | 开启 |
+| 触发策略 | 被提及、昵称称呼、自然接话、随机插话、冷场判断、自适应概率、安静时段 | 开启；昵称需配置 |
+| 对话节奏 | 同一人连续文字合并、同群有界排队、补充消息更新回复、取消过时插话 | 开启 |
 | 互动动作 | `silent`、Reaction、贴纸、文字回复 | 开启 |
 | 模型路由 | 被提及、随机、冷场可分别指定模型 | 开启 |
-| 接口容错 | 请求与响应限制、群级防并发、主备 AI 自动切换、停机排空 | 开启 |
+| 接口容错 | 多供应商、多 Key、多模型轮询；失败冷却、限流等待、空回复换模型、停机排空 | 开启 |
 | 群管理 | Inline 面板、活跃度预设、群级参数持久化 | 开启 |
-| 人设 | 全局基础人设 + 每个群最多 30 条附加规则 | 开启 |
+| 人设 | 全局基础人设 + 每个群最多 30 条附加规则；按目标消息和引用关系回复 | 开启 |
+| 记忆 | 管理员确认后记录当前群/Topic 的短期记忆，可删除、自动过期 | 可用 |
+| 表达学习 | 核对真人原文、按群/Topic 隔离、场景匹配、支持查看删除，默认保留 30 天 | 开启 |
+| OpenCode | 可选自动安装 CLI，发现免费模型并在失败时尝试下一模型 | 可用 |
 | 关键词规则 | 固定回复、删除匹配消息、独立通知冷却 | 开启 |
 | 用量 | 24 小时请求量、成功数、字符数和平均延迟 | 开启 |
 | 图片理解 | 将触发消息中的图片交给视觉模型 | 关闭 |
@@ -72,18 +80,19 @@ flowchart LR
     C -->|是| D[固定回复或删除消息]
     C -->|否| E{触发条件满足?}
     E -->|否| F[保持安静]
-    E -->|是| G[按需读取图片/语音/链接]
-    G --> H[主 AI 接口]
-    H -->|可重试错误| I[备用 AI 接口]
+    E -->|是| Q[收齐连续文字并按群排队]
+    Q --> G[按需读取图片/语音/链接]
+    G --> H[模型池轮询]
+    H -->|失败/空输出/无效 JSON| I[冷却当前 Key/模型]
+    I --> H
     H --> J{AI 决策}
-    I --> J
     J --> K[Reaction]
     J --> L[贴纸]
     J --> M[文字或语音]
     J --> F
 ```
 
-同一个群同一时间只允许一个 AI 请求，不同群仍可并行。媒体文件只会在消息已经触发 AI 后下载，不会扫描群里的每一张图片或每一条语音。
+同一个群同一时间只允许一个 AI 请求，直接提问会排队处理，不同群仍可并行。同一人连续补充文字默认等待 900ms，最长 3 秒；生成期间收到补充，会结合新上下文处理。媒体文件只会在消息已经触发 AI 后下载，不会扫描群里的每一张图片或每一条语音。
 
 ## 运行要求
 
@@ -112,7 +121,7 @@ flowchart LR
 
 ### 2. 准备 AI 接口
 
-需要一个 OpenAI 兼容接口，至少包含：
+常规部署可以使用 OpenAI 兼容接口，至少包含：
 
 | 配置 | 示例 |
 | --- | --- |
@@ -120,7 +129,7 @@ flowchart LR
 | `AI_API_KEY` | `sk-xxxxxx` |
 | `AI_MODEL` | `gpt-4o-mini` |
 
-支持常见的 `/chat/completions`，也支持 Responses API。中转站提供完整地址时可以直接使用 `AI_API_URL`。
+支持常见的 `/chat/completions`，也支持 Responses API。中转站提供完整地址时可以直接使用 `AI_API_URL`。需要 Anthropic、Gemini 或多个 Key/模型轮询时，使用下方的[多供应商模型池](#多供应商模型池与故障切换)。也可单独配置 [OpenCode](#opencode-cli-免费模型)，真实生成可用性以部署后的验证为准。
 
 ### 3. 安装 Docker
 
@@ -221,10 +230,10 @@ docker compose logs --tail=100
 
 ```env
 # 控制发给模型的上下文与输出
-AI_MAX_CONTEXT_MESSAGES=12
-AI_MAX_INPUT_CHARS=1500
-AI_MAX_MESSAGE_CHARS=160
-AI_MAX_OUTPUT_TOKENS=120
+AI_MAX_CONTEXT_MESSAGES=24
+AI_MAX_INPUT_CHARS=6000
+AI_MAX_MESSAGE_CHARS=600
+AI_MAX_OUTPUT_TOKENS=600
 AI_REQUEST_TIMEOUT_MS=30000
 
 # 自然互动
@@ -234,6 +243,9 @@ MIN_REPLY_INTERVAL_SECONDS=60
 MIN_MSGS_BETWEEN_REPLIES=3
 IDLE_THRESHOLD_MINUTES=20
 IDLE_COOLDOWN_MINUTES=60
+CONVERSATION_DEBOUNCE_MS=900
+CONVERSATION_FOLLOWUP_SECONDS=120
+EXPRESSION_LEARNING_ENABLED=true
 
 # 短期记忆
 MAX_HISTORY=40
@@ -272,7 +284,7 @@ docker compose up -d --build
 
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
-| `AI_API_TYPE` | `chat_completions` | `chat_completions` 或 `responses` |
+| `AI_API_TYPE` | `chat_completions` | `chat_completions`、`responses`、`anthropic` 或 `gemini` |
 | `AI_BASE_URL` | Groq OpenAI 地址 | 主接口基础地址 |
 | `AI_API_URL` | 空 | 主接口完整地址；填写后优先于 Base URL |
 | `AI_API_KEY` | 必填 | 主接口 API Key |
@@ -286,7 +298,76 @@ docker compose up -d --build
 
 群管理员还可以用 `/ai_model mention|random|idle` 覆盖当前群的模型，不影响其他群。
 
-### 备用 AI 接口
+### 多供应商模型池与故障切换
+
+复制 [`ai-providers.example.json`](ai-providers.example.json) 为 `ai-providers.json`，修改接口、模型及 `apiKeysEnv`，并把对应的 Key 写进 `.env`。不使用示例中的 `free-cli` 时，将该项设为 `"enabled": false`。
+
+Docker 使用命名卷保存模型池文件，先构建并创建容器，再复制配置：
+
+```bash
+cp ai-providers.example.json ai-providers.json
+# 编辑 ai-providers.json 和 .env，填写实际接口、模型及 Key
+docker compose create --build
+docker compose cp ai-providers.json tg-ai-bot:/app/data/ai-providers.json
+```
+
+在 `.env` 设置以下选项后，执行 `docker compose up -d --build`：
+
+```env
+AI_PROVIDERS_FILE=/app/data/ai-providers.json
+AI_POOL_STRATEGY=round_robin
+AI_MAX_ATTEMPTS=6
+AI_TOTAL_TIMEOUT_MS=90000
+AI_FAILURE_COOLDOWN_MS=60000
+```
+
+支持 `chat_completions`、`responses`、Anthropic `messages`、Gemini `generateContent` 和 `opencode`。同一供应商可以填多个 `apiKeysEnv` 与 `models`，程序会展开成独立的故障单元。`/ai_providers` 可查看当前冷却状态。配置文件在每次 AI 请求前读取，可在 Docker 卷中更新后立即生效。
+
+### OpenCode CLI 免费模型
+
+OpenCode 是独立 CLI，程序不会把 Telegram Token、API Key 或聊天记录写入 OpenCode 配置。发送给模型的聊天上下文仍会进入 OpenCode 会话记录，应一并保护数据卷。启用自动安装：
+
+```env
+OPENCODE_ENABLED=true
+OPENCODE_AUTO_INSTALL=true
+OPENCODE_MODELS=
+```
+
+或使用可选 Compose 覆盖：
+
+```sh
+docker compose -f docker-compose.yml -f docker-compose.opencode.yml up -d --build
+```
+
+机器人启动时会先检查安装并启动 OpenCode 常驻服务，收到消息后通过 `run --server` 向同一服务提交输入，不为每条消息重启服务。每 30 秒检查一次健康状态，空闲时进程退出也会自动重启；机器人退出时清理自己启动的服务。服务只监听 `127.0.0.1`，认证口令只保存在内存。使用 OpenCode 原生 `build` agent，工具执行需要确认，非交互调用自动拒绝工具权限请求。
+
+免费模型通过常驻服务的 `opencode models` 动态发现，默认每次最多尝试 3 个，失败后冷却并切换下一个或普通 API。可以先运行 `npm run opencode:install`，再运行 `npm run opencode:models` 查看目录。免费模型由 OpenCode 服务方提供，目录存在不代表当前能生成；服务返回 429、403、超时或无效 JSON 时按各模型分别记录失败。
+
+逐个实测目录里的免费模型，结果保存为 `data/opencode-model-probe.json`：
+
+```sh
+npm run opencode:probe
+```
+
+测试常驻模式并在测试完成后继续运行服务：
+
+```sh
+npm run opencode:service -- --probe-all
+```
+
+这两个命令都会发出真实模型请求并使用免费额度。`opencode:probe` 结束后清理自己的服务；`opencode:service` 持续运行直到收到退出信号。正常运行机器人时只需 `npm start`，无需单独再运行测试服务。
+
+Linux 部署后应在容器内验证真实回复，而不仅查看模型列表：
+
+```sh
+docker compose exec -e OPENCODE_SMOKE_MODEL=opencode/deepseek-v4.1-flash-free#high tg-ai-bot npm run opencode:smoke
+```
+
+当前已验证常驻进程、故障重启、模型切换及协议测试；机器人适配层稳定生成真实回复仍待部署验收。自动安装和容器构建的历史测试限制见 [Linux 验证记录](docs/linux-validation-2026-11-10.md)。模型目录可读取、测试接口通过，均不能替代真实聊天验收。
+
+CLI 安装包会根据操作系统、CPU 和 libc 选择二进制，程序从安装包的 `bin` 字段读取实际路径；Linux 文件名也可能带 `.exe`，不能按扩展名判断是否为 Windows 程序。`OPENCODE_BIN` 可指定已有 CLI 的绝对路径；默认使用独立配置，需要复用当前系统用户的 OpenCode 配置时设置 `OPENCODE_ISOLATED=false`。Windows 上调用成功不能证明 Linux 服务器的免费模型额度或网络可用，部署后以真实生成测试为准。
+
+### 兼容旧版主备配置
 
 ```env
 AI_FALLBACK_API_TYPE=chat_completions
@@ -295,29 +376,34 @@ AI_FALLBACK_API_KEY=sk-backup
 AI_FALLBACK_MODEL=gpt-4o-mini
 ```
 
-主接口出现以下情况时会尝试备用接口：
+模型池出现以下情况时会尝试下一项：
 
 - HTTP `408/409/425/429`
 - HTTP `5xx`
 - 网络连接错误
 - 请求超时
-- 图片请求返回 `400`，且备用接口已配置
+- 图片请求返回 `400`，且下一项支持视觉
+- 返回空内容、无效 JSON，或直接提及时没有可发送文字
 
-认证失败等明确不可重试错误不会盲目切换，方便及时发现配置问题。
+HTTP `401/403` 也会冷却当前 Key。程序不会把接口原始错误正文发送到群里，避免泄露响应中的 Key 或聊天内容。
 
 ### 上下文与成本
 
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
-| `AI_MAX_CONTEXT_MESSAGES` | `12` | 单次最多发送给 AI 的最近消息数 |
-| `AI_MAX_INPUT_CHARS` | `1500` | 单次群聊记录最大字符数 |
-| `AI_MAX_MESSAGE_CHARS` | `160` | 每条消息截断长度 |
-| `AI_MAX_OUTPUT_TOKENS` | `120` | 最大输出 token |
+| `AI_MAX_CONTEXT_MESSAGES` | `24` | 单次最多发送给 AI 的最近消息数 |
+| `AI_MAX_INPUT_CHARS` | `6000` | 单次群聊记录最大字符数 |
+| `AI_MAX_MESSAGE_CHARS` | `600` | 每条消息截断长度 |
+| `AI_MAX_OUTPUT_TOKENS` | `600` | 最大输出 token |
 | `MAX_HISTORY` | `40` | 每个群/Topic 在 SQLite 中保留的最大消息数 |
 | `MESSAGE_TTL_HOURS` | `24` | 短期上下文保留时间 |
 | `USAGE_TTL_DAYS` | `30` | AI 用量明细保留时间 |
 
-`MAX_HISTORY` 是本地短期历史上限，真正发送给模型的条数还会受到 `AI_MAX_CONTEXT_MESSAGES` 与字符限制约束。
+`MAX_HISTORY` 是本地短期历史上限，真正发送给模型的条数还会受到 `AI_MAX_CONTEXT_MESSAGES` 与字符限制约束。当前默认上下文为 24 条、6000 字符；闲聊会简短，认真提问允许适当展开。
+
+### 当前 Topic 记忆
+
+管理员可以使用 `/memory_add 内容` 记录已确认的群规、术语或偏好；`/memory` 查看，`/memory_del ID` 删除，`/memory_clear` 清空。记忆按群和 Telegram Topic 隔离，默认 30 天过期，不会自动从聊天内容猜测并保存用户隐私。
 
 ### 互动策略
 
@@ -335,6 +421,19 @@ AI_FALLBACK_MODEL=gpt-4o-mini
 | `RULE_COOLDOWN_SECONDS` | `60` | 同一关键词规则的通知冷却 |
 
 这些值是新群默认值。部署后可以通过 `/ai_panel`、`/ai_chance`、`/ai_set` 和 `/quiet` 为每个群独立调整。
+
+### 自然接话与表达学习
+
+| 变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `CONVERSATION_DEBOUNCE_MS` | `900` | 收齐同一人连续文字的等待毫秒数，累计最多 3 秒；`0` 关闭等待 |
+| `CONVERSATION_FOLLOWUP_SECONDS` | `120` | 机器人回应后，同一人可免 @ 继续接话的时间；`0` 关闭 |
+| `BOT_ALIASES` | 空 | 句首昵称称呼，英文逗号分隔，如 `喵喵,小喵` |
+| `EXPRESSION_LEARNING_ENABLED` | `true` | 从可核对的真人原文学习表达，并按场景使用；`false` 同时停用已有表达 |
+| `EXPRESSION_TTL_DAYS` | `30` | 学到的表达保留天数，每个群/Topic 最多 60 条 |
+| `MEMORY_TTL_DAYS` | `30` | 管理员通过 `/memory_add` 确认的记忆保留天数 |
+
+自然接话会考虑回复对象、其他人是否插入对话、是否在回复其他群友及对话是否已经结束。表达学习只附带在正常模型请求中，不额外调用学习模型；资料按群和 Topic 隔离。完整行为和部署后的测试方法见 [自然对话说明](docs/natural-conversation.md)。
 
 ### 图片、转写与链接
 
@@ -410,6 +509,7 @@ Docker Compose 使用命名卷 `tg-ai-bot-data` 保存：
 - 群人设规则
 - 关键词规则
 - AI 用量统计
+- 管理员确认的 Topic 记忆和学到的表达
 
 SQLite 使用 WAL 模式。启动时和运行期间会定期清理过期消息、用量记录并执行 `PRAGMA optimize`。容器重建不会删除命名卷；不要使用 `docker compose down -v`，除非明确要删除全部机器人数据。
 
@@ -433,6 +533,7 @@ SQLite 使用 WAL 模式。启动时和运行期间会定期清理过期消息�
 | `/chat_id` | 查看当前群 ID 和 Topic ID |
 | `/ai_status` | 查看当前群配置、模型、上下文和 24 小时用量 |
 | `/ai_test` | 测试当前群 AI 接口并显示模型与 Provider |
+| `/ai_providers` | 查看模型池、失败冷却及 OpenCode 常驻状态 |
 | `/ai_on` / `/ai_off` | 开启或关闭当前群 AI 互动 |
 | `/voice_on` / `/voice_off` | 开启或关闭当前群 TTS 回复 |
 | `/context_clear` | 清除当前 Topic 短期上下文，不影响群配置、人设、规则和贴纸 |
@@ -494,6 +595,20 @@ Inline 面板可以切换 AI、Reaction、语音，并应用三种预设：
 也可以先发送一条规则说明，再回复该消息发送 `/persona_add`。每个群最多保留 30 条附加规则，每条最多 500 字符。
 
 全局基础人设可以使用 `PERSONA_PROMPT` 覆盖；留空时使用 [src/persona.js](src/persona.js) 内置人设。
+
+### Topic 记忆与表达
+
+以下命令均要求管理员权限，并仅操作当前群的当前 Topic：
+
+| 命令 | 作用 |
+| --- | --- |
+| `/memory` | 查看管理员确认的记忆 |
+| `/memory_add 内容` | 添加已确认的群内约定、术语或偏好 |
+| `/memory_del ID` / `/memory_clear` | 删除一条或清空确认记忆 |
+| `/expressions` | 查看模型从真人原文中学到的表达及 ID |
+| `/expression_del ID` / `/expression_clear` | 删除一条或清空学到的表达 |
+
+`/context_clear` 清除短期聊天记录；确认记忆和表达集合分别使用对应的清空命令管理。
 
 ### 关键词规则
 
@@ -566,8 +681,11 @@ docker compose logs --tail=100 -f
 
 ### 日常更新
 
+本次更新会事务性升级 SQLite 到 schema 3，保留旧上下文和已确认记忆。先导出备份，再更新并重建；回退旧程序时需恢复与旧 schema 匹配的数据库备份。
+
 ```bash
 cd ~/tg-aibot
+sh scripts/migrate.sh export
 git pull
 docker compose up -d --build
 docker compose logs --tail=100
@@ -705,6 +823,8 @@ docker compose logs --tail=200
 - 默认每个群/Topic 最多 40 条消息
 - 默认消息最多保留 24 小时
 - 默认 AI 用量明细保留 30 天
+- 管理员确认的 Topic 记忆默认保留 30 天，每个 Topic 最多 30 条
+- 从真人原文学习的表达默认保留 30 天，每个 Topic 最多 60 条，可查看和删除
 - 不提供长期群摘要或无限期历史检索
 - 删除 Docker 数据卷会永久删除全部机器人数据
 
@@ -723,9 +843,16 @@ tg-aibot/
 │   ├── index.js               启动与生命周期
 │   ├── interactionService.js  消息生命周期与触发编排
 │   ├── decisionDelivery.js    Reaction、贴纸、文字和语音投递
-│   ├── ai.js                  主备 Provider 编排
-│   ├── aiClient.js            OpenAI 协议、HTTP 与模型路由
+│   ├── ai.js                  模型池调用与失败切换
+│   ├── aiClient.js            多种 AI 协议、HTTP 与模型路由
 │   ├── aiPrompt.js            提示词、上下文裁剪与决策解析
+│   ├── conversationContext.js 发言者识别、接话条件与语气参考
+│   ├── conversationQueue.js   连续文字合并与群级请求队列
+│   ├── expressionStore.js     表达学习、来源核对与过期清理
+│   ├── memoryStore.js         管理员确认的 Topic 记忆
+│   ├── providerPool.js        多供应商、多 Key、多模型轮询与冷却
+│   ├── opencode.js            OpenCode 安装、模型发现与调用
+│   ├── opencodeService.js     OpenCode 常驻进程与健康检查
 │   ├── commands/              按领域拆分的群管理命令
 │   ├── database.js            SQLite Schema 与旧数据导入
 │   ├── contextStore.js        Topic 上下文与 TTL
@@ -772,7 +899,7 @@ GitHub Actions 会在 `main` 推送和 Pull Request 时执行：
 5. 迁移脚本语法检查
 6. Docker 镜像构建
 
-Dependabot 每月检查 npm、Docker 基础镜像和 GitHub Actions 更新。当前测试覆盖 AI 请求超时与主备切换、停机排空、SQLite 旧数据迁移与严格 TTL、配置归一化、四种互动动作、直接提及、每群单次冷场触发、关键词删除不入上下文、链接 DNS 固定、响应大小限制、TTS、Reaction 和 Topic 清理/隔离。
+Dependabot 每月检查 npm、Docker 基础镜像和 GitHub Actions 更新。当前 66 项测试覆盖 AI 请求超时与模型池切换、原生 API 协议、OpenCode 进程管理、连续消息合并、同群排队与多群并行、补充消息更新、身份和 Topic 隔离、表达来源核对与清理、SQLite schema 3 升级、停机排空，以及原有媒体、规则和上下文功能。测试使用模拟模型或本地协议服务，不消耗真实模型额度；真实聊天效果仍需部署验收。
 
 ## 适用范围
 
@@ -794,7 +921,7 @@ Dependabot 每月检查 npm、Docker 基础镜像和 GitHub Actions 更新。当
 
 ## License
 
-本项目使用 [MIT License](LICENSE)。你可以自由使用、修改和分发，但需要保留许可证与版权声明。
+本项目使用 [GNU GPL v3.0](LICENSE)，使用、修改和分发须遵守该许可证。
 
 ---
 

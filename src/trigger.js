@@ -1,5 +1,7 @@
 const { getChat } = require('./contextStore');
 const { getChatConfig } = require('./chatConfigStore');
+const { isNaturalFollowup } = require('./conversationContext');
+const { envList } = require('./env');
 
 function normalizeUsername(username) {
   return (username || '').replace(/^@/, '').toLowerCase();
@@ -60,8 +62,13 @@ function decideTrigger(ctx, botInfo, threadId = 0) {
   const state = getChat(chatId, threadId);
   const config = getChatConfig(chatId);
   if (!config.aiEnabled) return null;
-  if (isMention(ctx, botInfo)) return 'mention';
+  if (ctx.chat.type === 'private' || isMention(ctx, botInfo)) return 'mention';
+  const text = (ctx.message.text || ctx.message.caption || '').trim();
+  const aliases = envList('BOT_ALIASES');
+  if (aliases.some(alias => text === alias || text.startsWith(`${alias}，`) ||
+    text.startsWith(`${alias},`) || text.startsWith(`${alias} `) || text.startsWith(`${alias}？`))) return 'mention';
   if (isQuietHours(config)) return null;
+  if (isNaturalFollowup(ctx, state)) return 'followup';
 
   const now = Date.now();
   const cooledDown = now - state.lastBotReplyAt > config.minReplyIntervalSeconds * 1000;

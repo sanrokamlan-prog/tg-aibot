@@ -2,10 +2,13 @@ const { pruneExpiredMessages } = require('./contextStore');
 const { getDatabase } = require('./database');
 const { envInt } = require('./env');
 const { pruneExpiredUsage } = require('./usageStore');
+const { pruneExpiredExpressions } = require('./expressionStore');
 
 function runMaintenance() {
   pruneExpiredMessages();
   pruneExpiredUsage();
+  pruneExpiredExpressions();
+  getDatabase().prepare('DELETE FROM conversation_memories WHERE expires_at <= ?').run(Date.now());
   getDatabase().exec('PRAGMA optimize;');
 }
 

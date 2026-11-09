@@ -32,7 +32,7 @@ function pruneStateMessages(state, now = Date.now()) {
 function loadMessages(chatId, threadId) {
   const rows = getDatabase().prepare(`
     SELECT * FROM (
-      SELECT id, telegram_message_id, reply_to_message_id, user_name, text, ts, from_bot
+      SELECT id, telegram_message_id, reply_to_message_id, user_name, text, ts, from_bot, sender_id, learning_eligible
       FROM messages
       WHERE chat_id = ? AND thread_id = ? AND ts >= ?
       ORDER BY id DESC LIMIT ?
@@ -47,6 +47,8 @@ function loadMessages(chatId, threadId) {
     text: row.text,
     ts: row.ts,
     fromBot: Boolean(row.from_bot),
+    senderId: row.sender_id,
+    learningEligible: Boolean(row.learning_eligible),
   }));
 }
 
@@ -114,11 +116,12 @@ function pushMessage(chatId, threadId, msg) {
   const result = getDatabase().prepare(`
     INSERT INTO messages(
       chat_id, thread_id, telegram_message_id, reply_to_message_id,
-      user_name, text, ts, from_bot
-    ) VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+      user_name, text, ts, from_bot, sender_id, learning_eligible
+    ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     String(chatId), normalizeThreadId(threadId), msg.telegramMessageId || null,
-    msg.replyToMessageId || null, msg.user, msg.text, msg.ts, msg.fromBot ? 1 : 0
+    msg.replyToMessageId || null, msg.user, msg.text, msg.ts, msg.fromBot ? 1 : 0,
+    msg.senderId == null ? null : String(msg.senderId), msg.learningEligible ? 1 : 0
   );
   const stored = { ...msg, dbId: Number(result.lastInsertRowid) };
   state.messages.push(stored);

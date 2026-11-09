@@ -30,6 +30,12 @@ bot.catch((error, ctx) => {
 async function main() {
   getDatabase();
   runMaintenance();
+  // Start the resident CLI before receiving messages, including when using an existing binary.
+  const pool = require('./providerPool').loadProviders();
+  if (pool.providers.some(p => p.apiType === 'opencode')) {
+    try { await require('./opencode').startOpenCodeService({ timeoutMs: envInt('OPENCODE_INSTALL_TIMEOUT_MS', 180000) }); }
+    catch (error) { console.warn('OpenCode 常驻服务启动失败，将按模型池尝试其他接口:', error.message); }
+  }
   botInfo = await bot.telegram.getMe();
   await bot.telegram.setMyCommands(BOT_COMMANDS);
   if (!getAllowedChatIds().length) {
@@ -55,11 +61,13 @@ async function shutdown(signal) {
   const drained = await waitForChatAiIdle(envInt('SHUTDOWN_DRAIN_TIMEOUT_MS', 15000));
   if (drained) closeDatabase();
   else console.warn('停机等待 AI 请求超时，将保持数据库可用并由容器停止剩余任务。');
+  await require('./opencode').stopOpenCodeService();
 }
 
-main().catch((error) => {
+main().catch(async (error) => {
   console.error('启动失败:', error.message);
   closeDatabase();
+  await require('./opencode').stopOpenCodeService();
   process.exit(1);
 });
 

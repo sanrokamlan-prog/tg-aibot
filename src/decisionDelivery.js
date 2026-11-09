@@ -1,4 +1,4 @@
-const { pushMessage, markBotReplied } = require('./contextStore');
+const { pushMessage, markBotReplied, getChat } = require('./contextStore');
 const { envInt } = require('./env');
 const { sendStickerForContext, sendStickerToChat } = require('./stickerService');
 const { replyExtra, threadExtra } = require('./telegramMessage');
@@ -30,13 +30,23 @@ function shouldUseVoice(config, random = Math.random) {
   return Boolean(config.voiceEnabled) && random() < config.ttsReplyChance;
 }
 
-async function sendVoiceForContext(ctx, text, quote) {
+function isRepeatedReply(chatId, threadId, decision, mode) {
+  if (mode === 'mention' || decision.action !== 'reply') return false;
+  const normalize = text => String(text || '').toLowerCase().replace(/[\s\p{P}\p{S}]/gu, '');
+  const target = normalize(decision.reply);
+  return Boolean(target) && getChat(chatId, threadId).messages.filter(m => m.fromBot).slice(-4)
+    .some(m => normalize(m.text) === target);
+}
+
+async function sendVoiceForContext(ctx, text, quote, shouldCancel) {
   const audio = await textToSpeech(text);
+  if (shouldCancel()) return null;
   return ctx.replyWithVoice({ source: audio.buffer, filename: audio.filename }, replyExtra(ctx, quote));
 }
 
-async function sendVoiceToChat(bot, chatId, threadId, text) {
+async function sendVoiceToChat(bot, chatId, threadId, text, shouldCancel) {
   const audio = await textToSpeech(text);
+  if (shouldCancel()) return null;
   return bot.telegram.sendVoice(
     chatId,
     { source: audio.buffer, filename: audio.filename },
@@ -44,8 +54,10 @@ async function sendVoiceToChat(bot, chatId, threadId, text) {
   );
 }
 
-async function sendContextDecision(ctx, threadId, rawDecision, mode, config) {
+async function sendContextDecision(ctx, threadId, rawDecision, mode, config, shouldCancel = () => false) {
+  if (shouldCancel()) return false;
   const decision = normalizeDecision(rawDecision, mode, config);
+  if (isRepeatedReply(ctx.chat.id, threadId, decision, mode)) return false;
   let sent = null;
   let historyText = '';
 
@@ -72,15 +84,17 @@ async function sendContextDecision(ctx, threadId, rawDecision, mode, config) {
 
   if (decision.action === 'reply' && decision.reply) {
     await delayBeforeReply();
+    if (shouldCancel()) return false;
     if (shouldUseVoice(config)) {
       try {
-        sent = await sendVoiceForContext(ctx, decision.reply, mode === 'mention');
+        sent = await sendVoiceForContext(ctx, decision.reply, mode === 'mention', shouldCancel);
         historyText = `[语音回复] ${decision.reply}`;
       } catch (error) {
         console.error('TTS 失败，回退文字:', error.message);
       }
     }
     if (!sent) {
+      if (shouldCancel()) return false;
       sent = await ctx.reply(decision.reply, replyExtra(ctx, mode === 'mention'));
       historyText = decision.reply;
     }
@@ -93,13 +107,16 @@ async function sendContextDecision(ctx, threadId, rawDecision, mode, config) {
     ts: Date.now(),
     fromBot: true,
     telegramMessageId: sent?.message_id || null,
+    replyToMessageId: ctx.message.message_id,
   });
   markBotReplied(ctx.chat.id, threadId);
   return true;
 }
 
-async function sendIdleDecision(bot, state, rawDecision, config) {
+async function sendIdleDecision(bot, state, rawDecision, config, shouldCancel = () => false) {
+  if (shouldCancel()) return false;
   const decision = normalizeDecision(rawDecision, 'idle', config);
+  if (isRepeatedReply(state.chatId, state.threadId, decision, 'idle')) return false;
   let sent = null;
   let historyText = '';
 
@@ -111,13 +128,14 @@ async function sendIdleDecision(bot, state, rawDecision, config) {
   if (decision.action === 'reply' && decision.reply) {
     if (shouldUseVoice(config)) {
       try {
-        sent = await sendVoiceToChat(bot, state.chatId, state.threadId, decision.reply);
+        sent = await sendVoiceToChat(bot, state.chatId, state.threadId, decision.reply, shouldCancel);
         historyText = `[语音回复] ${decision.reply}`;
       } catch (error) {
         console.error('冷场 TTS 失败，回退文字:', error.message);
       }
     }
     if (!sent) {
+      if (shouldCancel()) return false;
       sent = await bot.telegram.sendMessage(state.chatId, decision.reply, threadExtra(state.threadId));
       historyText = decision.reply;
     }

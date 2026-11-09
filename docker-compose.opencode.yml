@@ -1,0 +1,11 @@
+# Optional: docker compose -f docker-compose.yml -f docker-compose.opencode.yml up -d --build
+services:
+  tg-ai-bot:
+    environment:
+      OPENCODE_ENABLED: "true"
+      OPENCODE_AUTO_INSTALL: "true"
+      SHUTDOWN_DRAIN_TIMEOUT_MS: "90000"
+    tmpfs:
+      - /tmp:size=512m
+    pids_limit: 256
+    stop_grace_period: 100s

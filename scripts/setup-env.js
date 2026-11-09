@@ -125,6 +125,18 @@ AI_FALLBACK_API_TYPE=chat_completions
 AI_FALLBACK_BASE_URL=
 AI_FALLBACK_API_KEY=
 AI_FALLBACK_MODEL=
+AI_PROVIDERS_FILE=
+AI_POOL_STRATEGY=
+AI_MAX_ATTEMPTS=6
+AI_TOTAL_TIMEOUT_MS=90000
+AI_FAILURE_COOLDOWN_MS=60000
+AI_MAX_REPLY_CHARS=800
+OPENCODE_ENABLED=false
+OPENCODE_AUTO_INSTALL=false
+OPENCODE_VERSION=2.2.6
+OPENCODE_MODELS=
+OPENCODE_ISOLATED=true
+MEMORY_TTL_DAYS=30
 
 # 省钱配置：限制每次请求带多少上下文和最多输出多少 token
 AI_MAX_CONTEXT_MESSAGES=${quoteEnv(config.maxContextMessages)}
@@ -323,7 +335,7 @@ async function main() {
   if (customizePersona) {
     personaPrompt = await askMultiline({
       title: '自定义人设',
-      description: '例子：你是群里的普通群友，说话简短、活泼、偶尔吐槽，不要暴露自己是 AI。',
+      description: '例子：自然参与群聊，活泼、偶尔吐槽；闲聊简短，认真提问时给出具体回答。',
     });
   }
 

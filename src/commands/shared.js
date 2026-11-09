@@ -15,6 +15,8 @@ const BOT_COMMANDS = [
   { command: 'context_clear', description: '清除当前话题上下文' },
   { command: 'persona', description: '查看群人设规则' },
   { command: 'ai_test', description: '测试 AI 接口' },
+  { command: 'ai_providers', description: '查看模型池与故障冷却' },
+  { command: 'memory', description: '管理当前话题记忆' },
   { command: 'usage', description: '查看 24 小时 AI 用量' },
   { command: 'chat_id', description: '查看当前聊天 ID' },
   { command: 'my_id', description: '查看自己的用户 ID' },

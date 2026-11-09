@@ -15,7 +15,7 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -28,3 +28,13 @@ jobs:
       - run: npm audit --omit=dev --audit-level=high
       - run: sh -n scripts/migrate.sh
       - run: docker build -t tg-aibot:test .
+      # Exercise the real Linux/musl CLI installation as the unprivileged app user.
+      # Model generation has external free-tier quotas, so CI checks installation and catalog only.
+      - name: OpenCode Linux container smoke test
+        run: >-
+          docker run --rm --read-only --init
+          --tmpfs /app/data:rw,uid=1000,gid=1000,size=2g
+          --tmpfs /tmp:rw,size=512m
+          --cap-drop ALL --security-opt no-new-privileges
+          -e DATA_DIR=/app/data
+          tg-aibot:test npm run opencode:smoke

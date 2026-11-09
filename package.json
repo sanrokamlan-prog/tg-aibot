@@ -7,6 +7,11 @@
   "scripts": {
     "start": "node src/index.js",
     "setup": "node scripts/setup-env.js",
+    "opencode:install": "node scripts/opencode.js install",
+    "opencode:models": "node scripts/opencode.js models",
+    "opencode:smoke": "node scripts/opencode-smoke.js",
+    "opencode:probe": "node scripts/opencode-probe.js",
+    "opencode:service": "node scripts/opencode-service.js",
     "check": "node scripts/check-js.js",
     "test": "node --test",
     "test:coverage": "node --test --experimental-test-coverage"

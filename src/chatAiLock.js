@@ -38,10 +38,15 @@ function getActiveChatAiCount() {
   return activeChatIds.size;
 }
 
+function isAcceptingChatAi() {
+  return accepting;
+}
+
 module.exports = {
   tryAcquireChatAi,
   releaseChatAi,
   beginChatAiShutdown,
   waitForChatAiIdle,
   getActiveChatAiCount,
+  isAcceptingChatAi,
 };

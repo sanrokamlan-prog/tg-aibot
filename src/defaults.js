@@ -1,8 +1,8 @@
 const AI_DEFAULTS = Object.freeze({
-  maxContextMessages: 12,
-  maxInputChars: 1500,
-  maxMessageChars: 160,
-  maxOutputTokens: 120,
+  maxContextMessages: 24,
+  maxInputChars: 6000,
+  maxMessageChars: 600,
+  maxOutputTokens: 600,
   requestTimeoutMs: 30000,
   responseMaxBytes: 1024 * 1024,
 });

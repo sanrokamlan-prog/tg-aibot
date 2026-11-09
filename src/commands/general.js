@@ -9,8 +9,21 @@ const { getStickerTags } = require('../stickerService');
 const { getThreadId, replyExtra } = require('../telegramMessage');
 const { getUsageSummary } = require('../usageStore');
 const { formatConfig, modelOverrides, requireAdmin } = require('./shared');
+const { loadProviders, providerRouter } = require('../providerPool');
 
 function registerGeneralCommands(bot, getBotInfo) {
+  bot.command('ai_providers', async (ctx) => {
+    if (!(await requireAdmin(ctx))) return;
+    try {
+      const pool = loadProviders();
+      const rows = providerRouter.status(pool).map(p => `${p.name} / ${p.model} (${p.apiType})：${p.cooldownMs ? `冷却 ${Math.ceil(p.cooldownMs / 1000)} 秒 ${p.reason}` : '就绪'}`);
+      if (pool.providers.some(p => p.apiType === 'opencode')) {
+        const status = require('../opencode').openCodeServiceStatus();
+        rows.push(`OpenCode 常驻服务：${status.running ? '运行中' : '未就绪'}，重启 ${status.restarts} 次`);
+      }
+      return ctx.reply(`策略：${pool.strategy}\n${rows.join('\n')}`.slice(0, 3900));
+    } catch (error) { return ctx.reply(error.message); }
+  });
   bot.command('my_id', async (ctx) => {
     const userId = ctx.from?.id;
     return ctx.reply(userId ? `你的 Telegram 用户 ID 是：${userId}` : '没有获取到你的用户 ID');
@@ -73,7 +86,7 @@ function registerGeneralCommands(bot, getBotInfo) {
         mode: 'mention',
         modelOverrides: modelOverrides(config),
       });
-      return ctx.reply(`AI 测试成功\naction: ${result.action}\nreply: ${result.reply || '(空)'}\nreaction: ${result.reaction}\nmodel: ${result.model}\nprovider: ${result.provider}`);
+      return ctx.reply(`AI 测试成功\naction: ${result.action}\nreply: ${result.reply || '(空)'}\nreaction: ${result.reaction}\nmodel: ${result.model}\nprovider: ${result.provider}\nattempts: ${result.attempts}`);
     } catch (error) {
       return ctx.reply(`AI 测试失败：${error.message.slice(0, 1000)}`);
     } finally {

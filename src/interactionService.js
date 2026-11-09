@@ -1,5 +1,5 @@
 const { decideAndReply } = require('./ai');
-const { tryAcquireChatAi, releaseChatAi } = require('./chatAiLock');
+const { tryAcquireChatAi, releaseChatAi, isAcceptingChatAi } = require('./chatAiLock');
 const { getChatConfig } = require('./chatConfigStore');
 const {
   chats,
@@ -16,6 +16,10 @@ const {
 const { runMessageExtensions } = require('./extensions');
 const { prepareMediaContext } = require('./mediaContext');
 const { getPersona } = require('./personaService');
+const { buildMemoryContext } = require('./memoryStore');
+const { buildExpressionContext, recordExpression } = require('./expressionStore');
+const { senderId, isAcknowledgement } = require('./conversationContext');
+const { createConversationQueue } = require('./conversationQueue');
 const { requireAllowedChat } = require('./access');
 const { getStickerTags } = require('./stickerService');
 const { decideTrigger, isQuietHours } = require('./trigger');
@@ -39,15 +43,20 @@ function isIdleEligible(state, config, now = Date.now()) {
 }
 
 function createInteractionService(bot, getBotInfo) {
+  const queue = createConversationQueue(processJob);
+
   async function handleMessage(ctx) {
+    if (!isAcceptingChatAi()) return;
     if (!requireAllowedChat(ctx)) return;
     if (ctx.message.text?.startsWith('/')) return;
+    if (ctx.from?.is_bot && !ctx.message.sender_chat) return;
     const initialText = normalizeMessageText(ctx.message);
     if (!initialText) return;
 
     const chatId = ctx.chat.id;
     const threadId = getThreadId(ctx);
     const handledBy = await runMessageExtensions(ctx, initialText);
+    if (!isAcceptingChatAi()) return;
     if (handledBy) {
       console.log(`扩展已处理消息: chat=${chatId}, extension=${handledBy}`);
       return;
@@ -58,16 +67,33 @@ function createInteractionService(bot, getBotInfo) {
       text: initialText,
       ts: Date.now(),
       fromBot: false,
+      senderId: senderId(ctx),
+      learningEligible: Boolean(ctx.message.text && !ctx.message.forward_origin &&
+        !ctx.message.forward_date && !ctx.message.via_bot && !ctx.message.sender_chat &&
+        !(ctx.message.entities || []).some(entity =>
+          ['blockquote', 'expandable_blockquote', 'code', 'pre', 'url', 'text_link'].includes(entity.type))),
       telegramMessageId: ctx.message.message_id,
       replyToMessageId: ctx.message.reply_to_message?.message_id || null,
     });
 
-    const trigger = decideTrigger(ctx, getBotInfo(), threadId);
+    let trigger = decideTrigger(ctx, getBotInfo(), threadId);
+    const pending = queue.participant(chatId, threadId, stored.senderId);
+    const config = getChatConfig(chatId);
+    if (!trigger && pending && config.aiEnabled && !isQuietHours(config) &&
+      !isAcknowledgement(initialText) && !ctx.message.reply_to_message &&
+      !(ctx.message.entities || ctx.message.caption_entities || []).some(entity =>
+        ['mention', 'text_mention'].includes(entity.type))) trigger = 'followup';
     if (!trigger) return;
-    if (!tryAcquireChatAi(chatId)) {
-      console.log(`跳过并发AI触发: chat=${chatId}, mode=${trigger}`);
-      return;
+    const completed = await queue.enqueue({ chatId, threadId, senderId: stored.senderId, ctx, stored, initialText, trigger,
+      mergeable: Boolean(ctx.message.text && !ctx.message.reply_to_message) });
+    if (!completed && trigger === 'mention' && isAcceptingChatAi()) {
+      // A bounded queue can fill under abuse; do not silently discard a direct question.
+      await ctx.reply('这会儿消息有点多，稍等一下再叫我。', replyExtra(ctx, true));
     }
+  }
+
+  async function processJob({ chatId, threadId, ctx, stored, initialText, trigger, continuation }, hasNewer) {
+    if (!getChatConfig(chatId).aiEnabled) return true;
 
     try {
       const media = await prepareMediaContext(ctx);
@@ -78,27 +104,38 @@ function createInteractionService(bot, getBotInfo) {
         console.warn(`发送输入状态失败: chat=${chatId}:`, error.message);
       }
       const state = getChat(chatId, threadId);
+      const messages = state.messages.map(message => ({ ...message }));
+      const newestHumanId = messages.findLast(message => !message.fromBot)?.dbId;
       const config = getChatConfig(chatId);
       const decision = await decideAndReply({
         chatId,
         persona: getPersona(chatId),
-        messages: state.messages,
-        mode: trigger,
+        messages,
+        replyTarget: { user: stored.user, text: media.replacementText || initialText,
+          senderId: stored.senderId, isFollowup: continuation,
+          quotedText: ctx.message.reply_to_message?.text || ctx.message.reply_to_message?.caption || '' },
+        memoryContext: [buildMemoryContext(chatId, threadId),
+          buildExpressionContext(chatId, threadId, initialText)].filter(Boolean).join('\n\n'),
+        // Keep provider/model routing compatible with the existing three modes.
+        mode: trigger === 'followup' ? 'random' : trigger,
         stickerTags: getStickerTags(chatId),
         imageDataUrl: media.imageDataUrl,
         extraContext: media.extraContext,
         modelOverrides: modelOverrides(config),
       });
+      try { recordExpression(chatId, threadId, decision.learnedExpression, messages); }
+      catch (error) { console.warn('表达学习写入失败:', error.message); }
       console.log(`AI决策: chat=${chatId}, mode=${trigger}, action=${decision.action}, model=${decision.model}`);
-      await sendContextDecision(ctx, threadId, decision, trigger, config);
+      const shouldCancel = () => hasNewer() || (trigger !== 'mention' &&
+        getChat(chatId, threadId).messages.findLast(message => !message.fromBot)?.dbId !== newestHumanId);
+      await sendContextDecision(ctx, threadId, decision, trigger, config, shouldCancel);
     } catch (error) {
       console.error('AI 回复失败:', error.message);
-      if (trigger === 'mention') {
+      if (trigger === 'mention' && !hasNewer()) {
         await ctx.reply(`AI接口出错了：${error.message.slice(0, 1000)}`, replyExtra(ctx, true));
       }
-    } finally {
-      releaseChatAi(chatId);
     }
+    return true;
   }
 
   async function runIdleCheck() {
@@ -113,16 +150,21 @@ function createInteractionService(bot, getBotInfo) {
       attemptedChats.add(chatKey);
 
       try {
+        const humanAt = state.lastHumanMessageAt;
+        const messages = state.messages.map(message => ({ ...message }));
         const decision = await decideAndReply({
           chatId: state.chatId,
           persona: getPersona(state.chatId),
-          messages: state.messages,
+          messages,
+          memoryContext: buildMemoryContext(state.chatId, state.threadId),
           mode: 'idle',
           stickerTags: getStickerTags(state.chatId),
           modelOverrides: modelOverrides(config),
         });
-        await sendIdleDecision(bot, state, decision, config);
-        markIdlePrompted(state.chatId, state.threadId);
+        if (state.lastHumanMessageAt === humanAt) {
+          await sendIdleDecision(bot, state, decision, config, () => state.lastHumanMessageAt !== humanAt);
+          if (state.lastHumanMessageAt === humanAt) markIdlePrompted(state.chatId, state.threadId);
+        }
       } catch (error) {
         console.error(`冷场检测失败: chat=${state.chatId}:`, error.message);
       } finally {
