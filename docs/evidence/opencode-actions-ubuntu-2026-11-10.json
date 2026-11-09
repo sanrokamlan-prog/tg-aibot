@@ -1,0 +1,128 @@
+{
+  "startedAt": "2026-11-09T19:10:25.009Z",
+  "platform": "linux",
+  "architecture": "x64",
+  "stages": {
+    "install": {
+      "ok": true
+    },
+    "executable": {
+      "ok": true,
+      "version": "opencode v2.2.6"
+    },
+    "catalog": {
+      "ok": true,
+      "models": [
+        "opencode/beam-free",
+        "opencode/big-pickle",
+        "opencode/crouton-alpha-free",
+        "opencode/deepseek-v4.1-flash-free",
+        "opencode/flint-40b-free",
+        "opencode/glm-5.3-flash-free",
+        "opencode/mimo-v2.6-flash-free",
+        "opencode/nemotron-3.5-lightning-free",
+        "opencode/nemotron-3.5-super-vl-free",
+        "opencode/pulse-alpha-free"
+      ]
+    },
+    "resident": {
+      "ok": true,
+      "running": true
+    }
+  },
+  "models": [
+    {
+      "model": "opencode/pulse-alpha-free",
+      "native": {
+        "ok": false,
+        "status": null,
+        "error": "request_failed",
+        "elapsedMs": 1207
+      },
+      "bot": {
+        "ok": false,
+        "status": null,
+        "error": "request_failed",
+        "elapsedMs": 143
+      }
+    },
+    {
+      "model": "opencode/glm-5.3-flash-free",
+      "native": {
+        "ok": false,
+        "status": 429,
+        "error": "HTTP 429",
+        "elapsedMs": 1293
+      },
+      "bot": {
+        "ok": false,
+        "status": 429,
+        "error": "HTTP 429",
+        "elapsedMs": 306
+      }
+    },
+    {
+      "model": "opencode/mimo-v2.6-flash-free",
+      "native": {
+        "ok": false,
+        "status": 429,
+        "error": "HTTP 429",
+        "elapsedMs": 1292
+      },
+      "bot": {
+        "ok": false,
+        "status": 429,
+        "error": "HTTP 429",
+        "elapsedMs": 298
+      }
+    },
+    {
+      "model": "opencode/nemotron-3.5-lightning-free",
+      "native": {
+        "ok": false,
+        "status": 429,
+        "error": "HTTP 429",
+        "elapsedMs": 1277
+      },
+      "bot": {
+        "ok": false,
+        "status": 429,
+        "error": "HTTP 429",
+        "elapsedMs": 311
+      }
+    },
+    {
+      "model": "opencode/flint-40b-free",
+      "native": {
+        "ok": false,
+        "status": 429,
+        "error": "HTTP 429",
+        "elapsedMs": 1335
+      },
+      "bot": {
+        "ok": false,
+        "status": 429,
+        "error": "HTTP 429",
+        "elapsedMs": 271
+      }
+    },
+    {
+      "model": "opencode/deepseek-v4.1-flash-free#high",
+      "native": {
+        "ok": false,
+        "status": 429,
+        "error": "HTTP 429",
+        "elapsedMs": 1400
+      },
+      "bot": {
+        "ok": false,
+        "status": 429,
+        "error": "HTTP 429",
+        "elapsedMs": 279
+      }
+    }
+  ],
+  "ok": false,
+  "unavailableModels": [],
+  "completedAt": "2026-11-09T19:10:43.119Z"
+}

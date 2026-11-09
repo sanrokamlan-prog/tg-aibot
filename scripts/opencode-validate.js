@@ -27,7 +27,7 @@ async function validate({ client = cli, decide = decideAndReply } = {}) {
     report.stages.executable = { ok: true, version: version.trim().slice(0, 80) };
     const catalog = await client.listFreeModels({ refresh: true });
     report.stages.catalog = { ok: true, models: catalog };
-    const connection = await client.startOpenCodeService();
+    await client.startOpenCodeService();
     report.stages.resident = { ok: true, running: client.openCodeServiceStatus().running };
     const requested = (process.env.OPENCODE_VALIDATION_MODELS ||
       'opencode/deepseek-v4.1-flash-free#high,opencode/pulse-alpha-free,opencode/big-pickle')

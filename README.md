@@ -363,7 +363,7 @@ Linux 部署后应在容器内验证真实回复，而不仅查看模型列表�
 docker compose exec -e OPENCODE_SMOKE_MODEL=opencode/deepseek-v4.1-flash-free#high tg-ai-bot npm run opencode:smoke
 ```
 
-当前已验证常驻进程、故障重启、模型切换及协议测试；机器人适配层稳定生成真实回复仍待部署验收。自动安装和容器构建的历史测试限制见 [Linux 验证记录](docs/linux-validation-2026-11-10.md)。模型目录可读取、测试接口通过，均不能替代真实聊天验收。
+2026-11-10 已在 GitHub Actions 的 Ubuntu 与 Alpine 生产容器实际安装 OpenCode 2.2.6，启动服务并发送真实请求。安装和目录发现通过，但已测的 DeepSeek、Big Pickle、GLM、MiMo、Nemotron、Flint 均返回 HTTP 429，原生独立 CLI 与机器人路径均未获得真实回复。完整证据见 [Actions 实测报告](docs/opencode-actions-2026-11-10.md)。机器人适配层稳定生成真实回复仍待验收；模型目录可读取、测试接口通过，均不能替代真实聊天验收。
 
 可以在 [OpenCode real generation](https://github.com/sanrokamlan-prog/tg-aibot/actions/workflows/opencode-validation.yml) 点击 **Run workflow**，在 GitHub 托管的 Ubuntu 与 Alpine Docker 中自动安装 CLI、发现免费模型并测试真实回复。默认测试 3 个模型，每个模型对比原生 CLI 普通问候和本项目完整模型路由、严格 JSON 解析后的回复；至少一个模型通过机器人路径，该平台才通过。测试会使用免费额度，不配置或使用仓库 Secret，不连接 Telegram。每个平台的 `report.json` 保存在 Actions artifacts 和运行摘要中，记录安装、版本、目录、逐模型回复及失败状态；CLI 会话目录不会上传。
 
