@@ -1,0 +1,84 @@
+name: OpenCode real generation
+
+on:
+  workflow_dispatch:
+    inputs:
+      models:
+        description: 'Free model IDs (comma separated; must exist in discovered catalog)'
+        default: 'opencode/deepseek-v4.1-flash-free#high,opencode/iceman-free,opencode/big-pickle'
+        type: string
+      max_models:
+        description: 'Maximum models per platform (hard cap 6)'
+        default: '3'
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: opencode-real-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  generation:
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [ubuntu, alpine]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      DATA_DIR: ${{ github.workspace }}/data
+      OPENCODE_ENABLED: 'true'
+      OPENCODE_AUTO_INSTALL: 'true'
+      OPENCODE_VALIDATION_MODELS: ${{ inputs.models }}
+      OPENCODE_VALIDATION_MAX_MODELS: ${{ inputs.max_models }}
+      OPENCODE_VALIDATION_TIMEOUT_MS: '35000'
+      OPENCODE_REQUEST_TIMEOUT_MS: '35000'
+      AI_TOTAL_TIMEOUT_MS: '45000'
+      AI_MAX_ATTEMPTS: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Install and test real generation on Ubuntu
+        if: matrix.platform == 'ubuntu'
+        run: npm run opencode:validate
+      - name: Build Alpine production container
+        if: matrix.platform == 'alpine'
+        run: docker build -t tg-aibot:real-test .
+      - name: Install and test real generation in Alpine container
+        if: matrix.platform == 'alpine'
+        run: |
+          mkdir -p data/opencode-validation
+          docker create --name opencode-real --read-only --init \
+            --mount type=volume,dst=/app/data --tmpfs /tmp:rw,size=512m \
+            --cap-drop ALL --security-opt no-new-privileges \
+            -e DATA_DIR=/app/data -e OPENCODE_ENABLED -e OPENCODE_AUTO_INSTALL \
+            -e OPENCODE_VALIDATION_MODELS -e OPENCODE_VALIDATION_MAX_MODELS \
+            -e OPENCODE_VALIDATION_TIMEOUT_MS -e OPENCODE_REQUEST_TIMEOUT_MS \
+            -e AI_TOTAL_TIMEOUT_MS -e AI_MAX_ATTEMPTS \
+            tg-aibot:real-test npm run opencode:validate
+          trap 'docker rm -fv opencode-real >/dev/null' EXIT
+          docker start -a opencode-real || true
+          status="$(docker inspect -f '{{.State.ExitCode}}' opencode-real)"
+          docker cp opencode-real:/app/data/opencode-validation/report.json data/opencode-validation/report.json
+          exit "$status"
+      - name: Publish synthetic test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: opencode-real-${{ matrix.platform }}
+          path: data/opencode-validation/report.json
+          if-no-files-found: warn
+      - name: Write result summary
+        if: always()
+        run: |
+          if [ -f data/opencode-validation/report.json ]; then
+            echo '```json' >> "$GITHUB_STEP_SUMMARY"
+            cat data/opencode-validation/report.json >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          fi

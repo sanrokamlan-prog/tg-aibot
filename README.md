@@ -365,6 +365,10 @@ docker compose exec -e OPENCODE_SMOKE_MODEL=opencode/deepseek-v4.1-flash-free#hi
 
 当前已验证常驻进程、故障重启、模型切换及协议测试；机器人适配层稳定生成真实回复仍待部署验收。自动安装和容器构建的历史测试限制见 [Linux 验证记录](docs/linux-validation-2026-11-10.md)。模型目录可读取、测试接口通过，均不能替代真实聊天验收。
 
+可以在 [OpenCode real generation](https://github.com/sanrokamlan-prog/tg-aibot/actions/workflows/opencode-validation.yml) 点击 **Run workflow**，在 GitHub 托管的 Ubuntu 与 Alpine Docker 中自动安装 CLI、发现免费模型并测试真实回复。默认测试 3 个模型，每个模型对比原生 CLI 普通问候和本项目完整模型路由、严格 JSON 解析后的回复；至少一个模型通过机器人路径，该平台才通过。测试会使用免费额度，不配置或使用仓库 Secret，不连接 Telegram。每个平台的 `report.json` 保存在 Actions artifacts 和运行摘要中，记录安装、版本、目录、逐模型回复及失败状态；CLI 会话目录不会上传。
+
+同样的验收脚本可在部署机器运行 `npm run opencode:validate`，需要启用 `OPENCODE_ENABLED=true` 和自动安装，或指定已有 `OPENCODE_BIN`。该命令会发出真实请求，报告位于 `data/opencode-validation/report.json`。
+
 CLI 安装包会根据操作系统、CPU 和 libc 选择二进制，程序从安装包的 `bin` 字段读取实际路径；Linux 文件名也可能带 `.exe`，不能按扩展名判断是否为 Windows 程序。`OPENCODE_BIN` 可指定已有 CLI 的绝对路径；默认使用独立配置，需要复用当前系统用户的 OpenCode 配置时设置 `OPENCODE_ISOLATED=false`。Windows 上调用成功不能证明 Linux 服务器的免费模型额度或网络可用，部署后以真实生成测试为准。
 
 ### 兼容旧版主备配置
@@ -899,7 +903,7 @@ GitHub Actions 会在 `main` 推送和 Pull Request 时执行：
 5. 迁移脚本语法检查
 6. Docker 镜像构建
 
-Dependabot 每月检查 npm、Docker 基础镜像和 GitHub Actions 更新。当前 66 项测试覆盖 AI 请求超时与模型池切换、原生 API 协议、OpenCode 进程管理、连续消息合并、同群排队与多群并行、补充消息更新、身份和 Topic 隔离、表达来源核对与清理、SQLite schema 3 升级、停机排空，以及原有媒体、规则和上下文功能。测试使用模拟模型或本地协议服务，不消耗真实模型额度；真实聊天效果仍需部署验收。
+Dependabot 每月检查 npm、Docker 基础镜像和 GitHub Actions 更新。当前 69 项测试覆盖 AI 请求超时与模型池切换、原生 API 协议、OpenCode 进程管理、连续消息合并、同群排队与多群并行、补充消息更新、身份和 Topic 隔离、表达来源核对与清理、SQLite schema 3 升级、停机排空，以及原有媒体、规则和上下文功能。测试使用模拟模型或本地协议服务，不消耗真实模型额度；真实聊天效果仍需部署验收。
 
 ## 适用范围
 

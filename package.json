@@ -11,6 +11,7 @@
     "opencode:models": "node scripts/opencode.js models",
     "opencode:smoke": "node scripts/opencode-smoke.js",
     "opencode:probe": "node scripts/opencode-probe.js",
+    "opencode:validate": "node scripts/opencode-validate.js",
     "opencode:service": "node scripts/opencode-service.js",
     "check": "node scripts/check-js.js",
     "test": "node --test",
