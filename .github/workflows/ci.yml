@@ -32,11 +32,17 @@ jobs:
       # Model generation has external free-tier quotas, so CI checks installation and catalog only.
       - name: OpenCode Linux container smoke test
         run: |
-          app_uid="$(docker run --rm --entrypoint id tg-aibot:test -u)"
-          app_gid="$(docker run --rm --entrypoint id tg-aibot:test -g)"
+          # Match Compose's writable data volume, including its app ownership.
+          # --rm removes this anonymous volume when the smoke container exits.
           docker run --rm --read-only --init \
-            --tmpfs "/app/data:rw,uid=$app_uid,gid=$app_gid,size=2g" \
+            --mount type=volume,dst=/app/data \
             --tmpfs /tmp:rw,size=512m \
             --cap-drop ALL --security-opt no-new-privileges \
             -e DATA_DIR=/app/data \
-            tg-aibot:test npm run opencode:smoke
+            --entrypoint sh tg-aibot:test -c '
+              npm run opencode:smoke && exit 0
+              for log in /app/data/opencode/npm-cache/_logs/*-debug-0.log; do
+                if [ -f "$log" ]; then tail -n 80 "$log"; fi
+              done
+              exit 1
+            '
