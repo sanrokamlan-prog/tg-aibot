@@ -13,7 +13,13 @@ test.after(() => fs.rmSync(directory, { recursive: true, force: true }));
 function fakeClient() {
   return {
     ensureOpenCode: async () => '/synthetic/cli', cliEnvironment: () => ({}),
-    runProcess: async (_bin, args) => args[0] === '--version' ? '2.2.6' : '你好',
+    runProcess: async (_bin, args, options) => {
+      if (args[0] === '--version') return '2.2.6';
+      assert.ok(args.includes('--standalone'));
+      assert.equal(args.includes('--server'), false);
+      assert.equal(options.env.OPENCODE_CONFIG_CONTENT, undefined);
+      return '你好';
+    },
     listFreeModels: async () => ['opencode/test-free'],
     startOpenCodeService: async () => ({ url: 'http://127.0.0.1:1', env: {} }),
     openCodeServiceStatus: () => ({ running: true }), parseCliOutput: text => text,
@@ -27,6 +33,7 @@ test('requires a sendable bot decision and excludes non-catalog models', async (
     return { action: 'reply', reply: '歇一会儿' };
   } });
   assert.equal(result.ok, true); assert.equal(result.models.length, 1);
+  assert.deepEqual(result.unavailableModels, ['paid/provider']);
   assert.equal(result.models[0].native.ok, true); assert.equal(result.models[0].bot.ok, true);
   assert.equal(JSON.parse(fs.readFileSync(reportFile)).ok, true);
   assert.equal(process.env.OPENCODE_MODELS, undefined);

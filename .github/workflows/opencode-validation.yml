@@ -5,7 +5,7 @@ on:
     inputs:
       models:
         description: 'Free model IDs (comma separated; must exist in discovered catalog)'
-        default: 'opencode/deepseek-v4.1-flash-free#high,opencode/iceman-free,opencode/big-pickle'
+        default: 'opencode/deepseek-v4.1-flash-free#high,opencode/pulse-alpha-free,opencode/big-pickle'
         type: string
       max_models:
         description: 'Maximum models per platform (hard cap 6)'

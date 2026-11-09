@@ -30,24 +30,27 @@ async function validate({ client = cli, decide = decideAndReply } = {}) {
     const connection = await client.startOpenCodeService();
     report.stages.resident = { ok: true, running: client.openCodeServiceStatus().running };
     const requested = (process.env.OPENCODE_VALIDATION_MODELS ||
-      'opencode/deepseek-v4.1-flash-free#high,opencode/iceman-free,opencode/big-pickle')
+      'opencode/deepseek-v4.1-flash-free#high,opencode/pulse-alpha-free,opencode/big-pickle')
       .split(',').map(s => s.trim()).filter(Boolean);
     const selected = [...new Set(requested)].filter(model => catalog.includes(model.split('#')[0]))
       .slice(0, Math.min(6, envInt('OPENCODE_VALIDATION_MAX_MODELS', 3)));
+    report.unavailableModels = requested.filter(model => !catalog.includes(model.split('#')[0]));
     if (!selected.length) throw new Error('没有可测试的免费模型');
     save();
     console.log(`Installed ${report.stages.executable.version}; ${catalog.length} free models; testing ${selected.length}.`);
     for (const model of selected) {
       const entry = { model };
       report.models.push(entry);
-      // Native CLI with a plain greeting establishes whether the endpoint can
-      // generate at all; the bot path additionally requires valid decision JSON.
+      // A separate standalone CLI without the bot's injected configuration is
+      // the control. The bot path retains its own resident service and parser.
       const started = Date.now();
       try {
+        const nativeEnv = { ...env };
+        delete nativeEnv.OPENCODE_CONFIG_CONTENT;
         const raw = await client.runProcess(binary,
-          ['run', '--server', connection.url, '--format', 'json', '--agent', 'build', '--model', model, '--archived'],
+          ['run', '--standalone', '--format', 'json', '--model', model, '--archived'],
           { cwd: path.join(process.env.OPENCODE_DATA_DIR || path.join(process.env.DATA_DIR || 'data', 'opencode'), 'work'),
-            env: connection.env, input: '你好，请用中文简单打个招呼，不要使用任何工具。', timeoutMs: budgetMs });
+            env: nativeEnv, input: '你好，请用中文简单打个招呼，不要使用任何工具。', timeoutMs: budgetMs });
         const reply = client.parseCliOutput(raw);
         entry.native = { ok: Boolean(reply.trim()), reply: reply.slice(0, 300), elapsedMs: Date.now() - started };
       } catch (error) { entry.native = { ok: false, ...errorInfo(error), elapsedMs: Date.now() - started }; }
